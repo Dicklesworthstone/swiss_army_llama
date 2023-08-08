@@ -31,8 +31,7 @@ from sqlalchemy import text as sql_text
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.exc import SQLAlchemyError, OperationalError, IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy.orm import sessionmaker, declarative_base, relationship
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship, validates
 import faiss
 import pandas as pd
 import PyPDF2
@@ -188,10 +187,12 @@ async def build_faiss_indexes():
             logger.info(f"Faiss index built for model {model_name}.")
             faiss_indexes[model_name] = faiss_index  # Store the index by model name
             
+
 class TextEmbedding(Base):
     __tablename__ = "embeddings"
     id = Column(Integer, primary_key=True, index=True)
     text = Column(String, index=True)
+    text_hash = Column(String, index=True)  # Explicitly store the hash
     model_name = Column(String, index=True)
     embedding_json = Column(String)
     ip_address = Column(String)
@@ -200,10 +201,12 @@ class TextEmbedding(Base):
     total_time = Column(Float)
     document_id = Column(Integer, ForeignKey('document_embeddings.id'))
     document = relationship("DocumentEmbedding", back_populates="embeddings")
-    __table_args__ = (UniqueConstraint('text', 'model_name', name='_text_model_uc'),) # Unique constraint on text and model_name    
-    @hybrid_property
-    def text_hash(self):  # Hybrid property to automatically compute the hash when the text is set
-        return sha3_256(self.text.encode('utf-8')).hexdigest()
+    __table_args__ = (UniqueConstraint('text_hash', 'model_name', name='_text_hash_model_uc'),)
+    @validates('text')
+    def update_text_hash(self, key, text):
+        # Automatically compute the hash when the text is set
+        self.text_hash = sha3_256(text.encode('utf-8')).hexdigest()
+        return text
         
 class DocumentEmbedding(Base):
     __tablename__ = "document_embeddings"
