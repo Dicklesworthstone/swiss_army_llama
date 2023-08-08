@@ -67,6 +67,11 @@ AsyncSessionLocal = sessionmaker(
 Base = declarative_base()
 
 def setup_ramdisk():
+    cmd_check = f"sudo mount | grep {RAMDISK_PATH}" # Check if RAM disk already exists at the path
+    result = subprocess.run(cmd_check, shell=True, stdout=subprocess.PIPE).stdout.decode('utf-8')
+    if RAMDISK_PATH in result:
+        logger.info(f"RAM Disk already set up at {RAMDISK_PATH}. Skipping setup.")
+        return
     total_ram_gb = psutil.virtual_memory().total / (1024 ** 3)
     free_ram_gb = psutil.virtual_memory().free / (1024 ** 3)
     buffer_gb = 2  # buffer to ensure we don't use all the free RAM
@@ -201,13 +206,19 @@ def download_models():
     base_dir = os.path.dirname(current_file_path)
     models_dir = os.path.join(base_dir, 'models')
     logger.info("Checking models directory...")
-    if not os.path.exists(models_dir):
+    if USE_RAMDISK:
+        ramdisk_models_dir = os.path.join(RAMDISK_PATH, 'models')
+        if not os.path.exists(RAMDISK_PATH): # Check if RAM disk exists, and set it up if not
+            setup_ramdisk()
+        if all(os.path.exists(os.path.join(ramdisk_models_dir, model_name)) for model_name in model_names): # Check if models already exist in RAM disk
+            logger.info("Models found in RAM Disk.")
+            return model_names
+    if not os.path.exists(models_dir): # Check if models directory exists, and create it if not
         os.makedirs(models_dir)
         logger.info(f"Created models directory: {models_dir}")
     else:
         logger.info(f"Models directory exists: {models_dir}")
-    logger.info("Starting model downloads...")
-    for url, model_name_with_extension in zip(list_of_model_download_urls, model_names):
+    for url, model_name_with_extension in zip(list_of_model_download_urls, model_names): # Check if models are in regular disk, download if not
         filename = os.path.join(models_dir, model_name_with_extension)
         if not os.path.exists(filename):
             logger.info(f"Downloading model {model_name_with_extension} from {url}...")
@@ -215,10 +226,7 @@ def download_models():
             logger.info(f"Downloaded: {filename}")
         else:
             logger.info(f"File already exists: {filename}")
-    if USE_RAMDISK:
-        logger.info("RAM Disk is enabled. Checking RAM Disk for models...")
-        ramdisk_models_dir = os.path.join(RAMDISK_PATH, 'models')
-        os.makedirs(ramdisk_models_dir, exist_ok=True)
+    if USE_RAMDISK: # If RAM disk is enabled, copy models from regular disk to RAM disk
         copy_models_to_ramdisk(models_dir, ramdisk_models_dir)
     logger.info("Model downloads completed.")
     return model_names
