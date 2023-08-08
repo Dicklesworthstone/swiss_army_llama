@@ -34,10 +34,13 @@ logger = logging.getLogger(__name__)
 
 # Global variables
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
-USE_SECURITY_TOKEN = config("USE_SECURITY_TOKEN", default=False, cast=bool)
+
 use_hardcoded_security_token = 0
 if use_hardcoded_security_token:
     SECURITY_TOKEN = "Test123$"
+    USE_SECURITY_TOKEN = config("USE_SECURITY_TOKEN", default=False, cast=bool)
+else:
+    USE_SECURITY_TOKEN = False
 DATABASE_URL = "sqlite+aiosqlite:///embeddings.db"
 LLAMA_EMBEDDING_SERVER_LISTEN_PORT = config("LLAMA_EMBEDDING_SERVER_LISTEN_PORT", default=8089, cast=int)
 USE_RAMDISK = config("USE_RAMDISK", default=False, cast=bool)
