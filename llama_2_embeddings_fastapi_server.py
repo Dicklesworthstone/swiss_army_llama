@@ -16,8 +16,7 @@ from fastapi.responses import JSONResponse
 from langchain.embeddings import LlamaCppEmbeddings
 from pydantic import BaseModel
 from sklearn.metrics.pairwise import cosine_similarity
-from sqlalchemy import Column, String, Float, DateTime
-from sqlalchemy import Integer, UniqueConstraint
+from sqlalchemy import Column, String, Float, DateTime, Integer, UniqueConstraint, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.exc import SQLAlchemyError, OperationalError
@@ -36,7 +35,7 @@ logger = logging.getLogger(__name__)
 # Global variables
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 USE_SECURITY_TOKEN = config("USE_SECURITY_TOKEN", default=False, cast=bool)
-use_hardcoded_security_token = 1
+use_hardcoded_security_token = 0
 if use_hardcoded_security_token:
     SECURITY_TOKEN = "Test123$"
 DATABASE_URL = "sqlite+aiosqlite:///embeddings.db"
@@ -133,8 +132,8 @@ async def execute_with_retry(func, *args, **kwargs):
 async def initialize_db():
     logger.info("Initializing database...")
     async with engine.begin() as conn:
-        await conn.execute("PRAGMA journal_mode=WAL;") # Set SQLite to use Write-Ahead Logging (WAL) mode
-        await conn.execute("PRAGMA busy_timeout = 2000;") # Increase the busy timeout (for example, to 2 seconds)
+        await conn.execute(text("PRAGMA journal_mode=WAL;")) # Set SQLite to use Write-Ahead Logging (WAL) mode
+        await conn.execute(text("PRAGMA busy_timeout = 2000;")) # Increase the busy timeout (for example, to 2 seconds)
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database initialization completed.")
 
