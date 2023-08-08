@@ -5,3 +5,4 @@ sqlalchemy
 python-decouple
 psutil
 aiosqlite
+faiss-cpu
