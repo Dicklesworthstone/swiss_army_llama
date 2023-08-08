@@ -6,3 +6,7 @@ python-decouple
 psutil
 aiosqlite
 faiss-cpu
+pandas
+PyPDF2
+python-multipart
+python-magic
