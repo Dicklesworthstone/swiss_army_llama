@@ -1,22 +1,23 @@
+import asyncio
+import glob
 import json
 import logging
 import os 
-import glob
-import urllib.request
-import asyncio
+import random
 import shutil
 import subprocess
-import traceback
 import tempfile
 import time
+import traceback
+import urllib.request
 import zipfile
 from logging.handlers import RotatingFileHandler
 from hashlib import sha3_256
 from typing import List, Optional
 from datetime import datetime
+from collections import defaultdict
 import numpy as np
 from decouple import config
-from uuid import uuid4
 import uvicorn
 import psutil
 import fastapi
@@ -27,10 +28,11 @@ from pydantic import BaseModel
 from sklearn.metrics.pairwise import cosine_similarity
 from sqlalchemy import Column, String, Float, DateTime, Integer, UniqueConstraint, ForeignKey, LargeBinary, select
 from sqlalchemy import text as sql_text
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker, declarative_base, relationship
-from sqlalchemy.exc import SQLAlchemyError, OperationalError, IntegrityError
 from sqlalchemy.dialects.sqlite import JSON
+from sqlalchemy.exc import SQLAlchemyError, OperationalError, IntegrityError
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.ext.hybrid import hybrid_property
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 import faiss
 import pandas as pd
 import PyPDF2
@@ -80,10 +82,11 @@ USE_RAMDISK = config("USE_RAMDISK", default=False, cast=bool)
 RAMDISK_SIZE_IN_GB = config("RAMDISK_SIZE_IN_GB", default=1, cast=int)
 RAMDISK_PATH = "/mnt/ramdisk"
 MAX_RETRIES = config("MAX_RETRIES", default=3, cast=int)
-RETRY_DELAY_SECONDS = config("RETRY_DELAY_SECONDS", default=1, cast=int)
+RETRY_DELAY_BASE_SECONDS = config("RETRY_DELAY_BASE_SECONDS", default=1, cast=int)
+JITTER_FACTOR = config("JITTER_FACTOR", default=0.1, cast=float)
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 model_cache = {} # Model cache to store loaded models
-faiss_index = None
+faiss_indexes = {}  # Dictionary to hold FAISS indexes by model name
 associated_texts = []
 download_codes = {} # Dictionary to store download codes and their corresponding file paths
 logger.info(f"USE_RAMDISK is set to: {USE_RAMDISK}")
@@ -158,33 +161,38 @@ def clear_ramdisk():
         subprocess.run(cmd_umount, shell=True, check=True)
     logger.info(f"Cleared RAM Disk at {RAMDISK_PATH}")
 
-async def build_faiss_index():
-    global faiss_index, associated_texts
-    embeddings = []
-    associated_texts = []
-    logger.info("Building Faiss index...")
+async def build_faiss_indexes():
+    global faiss_indexes, associated_texts_by_model
+    faiss_indexes = {}
+    associated_texts_by_model = defaultdict(list) # Create a dictionary to store associated texts by model name
     async with AsyncSessionLocal() as session:
-        result = await session.execute(sql_text("SELECT text, embedding_json FROM embeddings"))
+        result = await session.execute(sql_text("SELECT model_name, text, embedding_json FROM embeddings"))
+        embeddings_by_model = defaultdict(list)
         for row in result.fetchall():
-            associated_texts.append(row[0])
-            embeddings.append(json.loads(row[1]))
-    embeddings = np.array(embeddings).astype('float32')
-    if embeddings.size == 0:
-        logger.error("No embeddings were loaded from the database, so nothing to build the Faiss index with!")
-        return
-    logger.info(f"Loaded {len(embeddings)} embeddings.")
-    logger.info(f"Embedding dimension: {embeddings.shape[1]}")
-    logger.info("Normalizing embeddings...")
-    faiss.normalize_L2(embeddings)  # Normalize the vectors for cosine similarity
-    faiss_index = faiss.IndexFlatIP(embeddings.shape[1])  # Use IndexFlatIP for cosine similarity
-    logger.info("Adding embeddings to Faiss index...")
-    faiss_index.add(embeddings)
-    logger.info("Faiss index built.")
+            model_name = row[0]
+            associated_texts_by_model[model_name].append(row[1]) # Store the associated text by model name
+            embeddings_by_model[model_name].append((row[1], json.loads(row[2])))
+        logger.info(f"Loaded embeddings for {len(embeddings_by_model)} models to compute Faiss indexes.")
+        for model_name, embeddings in embeddings_by_model.items():
+            logger.info(f"Building Faiss index for model {model_name}...")
+            embeddings_array = np.array([e[1] for e in embeddings]).astype('float32')
+            if embeddings_array.size == 0:
+                logger.error(f"No embeddings were loaded from the database for model {model_name}, so nothing to build the Faiss index with!")
+                continue
+            logger.info(f"Loaded {len(embeddings_array)} embeddings for model {model_name}.")
+            logger.info(f"Embedding dimension for model {model_name}: {embeddings_array.shape[1]}")
+            logger.info(f"Normalizing {len(embeddings_array)} embeddings for model {model_name}...")
+            faiss.normalize_L2(embeddings_array)  # Normalize the vectors for cosine similarity
+            faiss_index = faiss.IndexFlatIP(embeddings_array.shape[1])  # Use IndexFlatIP for cosine similarity
+            faiss_index.add(embeddings_array)
+            logger.info(f"Faiss index built for model {model_name}.")
+            faiss_indexes[model_name] = faiss_index  # Store the index by model name
 
 class TextEmbedding(Base):
     __tablename__ = "embeddings"
     id = Column(Integer, primary_key=True, index=True)  
     text = Column(String, index=True) 
+    text_hash = Column(String, index=True)
     model_name = Column(String, index=True) 
     embedding_json = Column(String)
     ip_address = Column(String)
@@ -193,17 +201,21 @@ class TextEmbedding(Base):
     total_time = Column(Float)
     document_id = Column(Integer, ForeignKey('document_embeddings.id'))
     document = relationship("DocumentEmbedding", back_populates="embeddings")
-    __table_args__ = (UniqueConstraint('text', 'model_name', name='_text_model_uc'),) # Unique constraint on text and model_name
-
+    __table_args__ = (UniqueConstraint('text_hash', 'model_name', name='_text_hash_model_uc'),)
+    @hybrid_property
+    def text_hash(self): # Hybrid property to automatically compute the hash when the text is set
+        return sha3_256(self.text.encode('utf-8')).hexdigest()
+        
 class DocumentEmbedding(Base):
     __tablename__ = "document_embeddings"
     id = Column(Integer, primary_key=True, index=True)
     document_id = Column(Integer, ForeignKey('documents.id'))
     filename = Column(String)
     mimetype = Column(String)
-    file_hash = Column(String)
+    file_hash = Column(String, index=True)
+    model_name = Column(String, index=True)    
     file_data = Column(LargeBinary) # To store the original file
-    results_json = Column(JSON) # To store the results JSON
+    results_json = Column(JSON) # To store the embedding results JSON
     document = relationship("Document", back_populates="document_embeddings")
     embeddings = relationship("TextEmbedding", back_populates="document")
 
@@ -223,9 +235,7 @@ class SimilarityResponse(BaseModel):
     similarity: float
     
 class SimilarStringResponse(BaseModel):
-    text: str
-    similarity: float
-    message: str = ""
+    results: List[dict]  # List of similar strings and their similarity scores
 
 class AllStringsResponse(BaseModel):
     strings: List[str]
@@ -233,9 +243,6 @@ class AllStringsResponse(BaseModel):
 class AllDocumentsResponse(BaseModel):
     strings: List[str]
 
-class DownloadLinkResponse(BaseModel):
-    download_link: str
-        
 class EmbeddingRequest(BaseModel):
     text: str
     model_name: str = DEFAULT_MODEL_NAME
@@ -247,7 +254,8 @@ class SimilarityRequest(BaseModel):
 
 class SimilarStringRequest(BaseModel):
     text: str
-    model_name: str = DEFAULT_MODEL_NAME
+    number_of_most_similar_strings_to_return: int = 10
+    model_name: Optional[str] = DEFAULT_MODEL_NAME
 
 async def execute_with_retry(func, *args, **kwargs):
     retries = 0
@@ -257,18 +265,24 @@ async def execute_with_retry(func, *args, **kwargs):
         except OperationalError as e:
             if 'database is locked' in str(e):
                 retries += 1
-                logger.warning(f"Database is locked. Retrying ({retries}/{MAX_RETRIES})...")
-                await asyncio.sleep(RETRY_DELAY_SECONDS)
+                # Implementing exponential backoff with jitter
+                sleep_time = RETRY_DELAY_BASE_SECONDS * (2 ** retries) + (random.random() * JITTER_FACTOR)
+                logger.warning(f"Database is locked. Retrying ({retries}/{MAX_RETRIES})... Waiting for {sleep_time} seconds")
+                await asyncio.sleep(sleep_time)
             else:
                 raise
     raise OperationalError("Database is locked after multiple retries")
 
 async def initialize_db():
     logger.info("Initializing database...")
-    async with engine.begin() as conn:
-        await conn.execute(sql_text("PRAGMA journal_mode=WAL;")) # Set SQLite to use Write-Ahead Logging (WAL) mode
-        await conn.execute(sql_text("PRAGMA busy_timeout = 2000;")) # Increase the busy timeout (for example, to 2 seconds)
-        await conn.run_sync(Base.metadata.create_all)
+    async with engine.begin() as conn: # Set SQLite to use Write-Ahead Logging (WAL) mode
+        await conn.execute(sql_text("PRAGMA journal_mode=WAL;"))
+        await conn.execute(sql_text("PRAGMA synchronous = NORMAL;")) # Set synchronous mode to NORMAL (from FULL)
+        await conn.execute(sql_text("PRAGMA cache_size = -1048576;")) # Set cache size to 1GB
+        await conn.execute(sql_text("PRAGMA busy_timeout = 5000;")) # Increase the busy timeout to 5 seconds
+        await conn.execute(sql_text("PRAGMA wal_autocheckpoint = 1000;")) # Set automatic checkpoint interval (for example, after every 1000 write transactions)
+        await conn.execute(sql_text("PRAGMA foreign_keys = ON;")) # Enable foreign key constraints (if needed)
+        await conn.run_sync(Base.metadata.create_all) # Create tables if not exists
     logger.info("Database initialization completed.")
 
 def download_models():
@@ -308,18 +322,19 @@ def download_models():
 
 async def get_embedding_from_db(text, model_name):
     logger.info(f"Retrieving embedding for '{text}' using model '{model_name}' from database...")
-    return await execute_with_retry(_get_embedding_from_db, text, model_name)
+    text_hash = sha3_256(text.encode('utf-8')).hexdigest() # Compute the hash
+    return await execute_with_retry(_get_embedding_from_db, text_hash, model_name)
 
-async def _get_embedding_from_db(text, model_name):
+async def _get_embedding_from_db(text_hash, model_name):
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            sql_text("SELECT embedding_json FROM embeddings WHERE text=:text AND model_name=:model_name"),
-            {"text": text, "model_name": model_name},
+            sql_text("SELECT embedding_json FROM embeddings WHERE text_hash=:text_hash AND model_name=:model_name"),
+            {"text_hash": text_hash, "model_name": model_name},
         )
         row = result.fetchone()
         if row:
             embedding_json = row[0]
-            logger.info(f"Embedding found in database for '{text}' using model '{model_name}'")
+            logger.info(f"Embedding found in database for text hash '{text_hash}' using model '{model_name}'")
             return json.loads(embedding_json)
         return None
     
@@ -341,7 +356,6 @@ async def get_or_compute_embedding(request: EmbeddingRequest, req: Request = Non
     await save_embedding_to_db(request.text, request.model_name, embedding_json, ip_address, request_time, response_time, total_time)
     return {"embedding": embedding_list}
 
-
 async def save_embedding_to_db(text, model_name, embedding_json, ip_address, request_time, response_time, total_time):
     existing_embedding = await get_embedding_from_db(text, model_name) # Check if the embedding already exists
     if existing_embedding is not None:
@@ -350,7 +364,12 @@ async def save_embedding_to_db(text, model_name, embedding_json, ip_address, req
     return await execute_with_retry(_save_embedding_to_db, text, model_name, embedding_json, ip_address, request_time, response_time, total_time)
 
 async def _save_embedding_to_db(text, model_name, embedding_json, ip_address, request_time, response_time, total_time):
-    async with AsyncSessionLocal() as session:
+    text_hash = sha3_256(text.encode('utf-8')).hexdigest()
+    async with AsyncSessionLocal() as session: # Check if the embedding already exists by using the hash
+        existing_embedding = await session.execute(select(TextEmbedding).filter(TextEmbedding.text_hash == text_hash, TextEmbedding.model_name == model_name))
+        existing_embedding = existing_embedding.scalar_one_or_none()
+        if existing_embedding:
+            return existing_embedding
         embedding = TextEmbedding(
             text=text,
             model_name=model_name,
@@ -364,39 +383,25 @@ async def _save_embedding_to_db(text, model_name, embedding_json, ip_address, re
             session.add(embedding)
             await session.commit()
             logger.info(f"Saved embedding for '{text}' using model '{model_name}' to database successfully.")
-        except IntegrityError as e: # Unique constraint violation
-            await session.rollback()
-            # Re-query to get the existing embedding
-            existing_embedding = await get_embedding_from_db(text, model_name)
-            if existing_embedding is not None:
-                return existing_embedding
-            else:
-                logger.error(f"Error saving embedding to database: {e}")
-                raise
         except Exception as e:
             logger.error(f"Error saving embedding to database: {e}")
             await session.rollback()
             raise
-        
+
 def load_model(model_name: str, raise_http_exception: bool = True):
     try:
-        logger.info(f"Attempting to load model: {model_name}")
         models_dir = os.path.join(RAMDISK_PATH, 'models') if USE_RAMDISK else os.path.join(BASE_DIRECTORY, 'models')
-        logger.info(f"Searching in models directory: {models_dir}")
         if model_name in model_cache:
-            logger.info(f"Model {model_name} found in cache")
             return model_cache[model_name]
         matching_files = glob.glob(os.path.join(models_dir, f"{model_name}*"))
-        logger.info(f"Found {len(matching_files)} model files matching: {model_name}")
         if not matching_files:
             logger.error(f"No model file found matching: {model_name}")
             raise FileNotFoundError
         matching_files.sort(key=os.path.getmtime, reverse=True)
         model_file_path = matching_files[0]
-        logger.info(f"Loading model file: {model_file_path}")
-        model_instance = LlamaCppEmbeddings(model_path=model_file_path)
+        model_instance = LlamaCppEmbeddings(model_path=model_file_path, use_mlock=True)
+        model_instance.client.verbose = False
         model_cache[model_name] = model_instance
-        logger.info(f"Loaded model file: {model_file_path}")
         return model_instance
     except TypeError as e:
         logger.error(f"TypeError occurred while loading the model: {e}")
@@ -413,7 +418,8 @@ def calculate_sentence_embedding(llama, text: str) -> np.array:
     retry_count = 0
     while sentence_embedding is None and retry_count < 3:
         try:
-            logger.info(f"Trying to calculate sentence embedding. Attempt: {retry_count + 1}")
+            if retry_count > 0:
+                logger.info(f"Attempting again calculate sentence embedding. Attempt number {retry_count + 1}")
             sentence_embedding = llama.embed_query(text)
         except TypeError as e:
             logger.error(f"TypeError in calculate_sentence_embedding: {e}")
@@ -427,6 +433,54 @@ def calculate_sentence_embedding(llama, text: str) -> np.array:
         logger.error("Failed to calculate sentence embedding after multiple attempts")
     return sentence_embedding
 
+async def compute_embeddings_for_document(strings, model_name, client_ip):
+    results = []
+    if USE_PARALLEL_INFERENCE_QUEUE:
+        logger.info(f"Using parallel inference queue to compute embeddings for {len(strings)} strings")
+        start_time = time.perf_counter()  # Record the start time
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS)
+        async def compute_embedding(text):  # Define a function to compute the embedding for a given text
+            try:
+                async with semaphore:  # Acquire a semaphore slot
+                    request = EmbeddingRequest(text=text, model_name=model_name)
+                    embedding = await get_embedding_vector(request, client_ip=client_ip)
+                    return text, embedding["embedding"]
+            except Exception as e:
+                logger.error(f"Error computing embedding for text '{text}': {e}")
+                return text, None
+        results = await asyncio.gather(*[compute_embedding(s) for s in strings])  # Use asyncio.gather to run the tasks concurrently
+        end_time = time.perf_counter()  # Record the end time
+        duration = end_time - start_time
+        logger.info(f"Parallel inference task for {len(strings)} strings completed in {duration:.2f} seconds")
+    else:  # Compute embeddings sequentially
+        logger.info(f"Using sequential inference to compute embeddings for {len(strings)} strings")
+        start_time = time.perf_counter()  # Record the start time
+        for s in strings:
+            embedding_request = EmbeddingRequest(text=s, model_name=model_name)
+            embedding = await get_embedding_vector(embedding_request, client_ip=client_ip)
+            results.append((s, embedding["embedding"]))
+        end_time = time.perf_counter()  # Record the end time
+        duration = end_time - start_time
+        logger.info(f"Sequential inference task for {len(strings)} strings completed in {duration:.2f} seconds")
+    filtered_results = [(text, embedding) for text, embedding in results if embedding is not None] # Filter out results with None embeddings (applicable to parallel processing) and return
+    return filtered_results
+
+async def store_document_embeddings_in_db(file, file_hash, original_file_content, json_content, results, model_name):
+    results_json_object = json.loads(json_content.decode())
+    async with AsyncSessionLocal() as session:
+        document = Document()
+        session.add(document)
+        await session.flush()
+        document_embedding = DocumentEmbedding(document_id=document.id, filename=file.filename, mimetype=file.content_type, file_hash=file_hash, file_data=original_file_content, results_json=results_json_object)        
+        session.add(document_embedding)
+        await session.flush()
+        for text, embedding in results:
+            embedding_entry = await _get_embedding_from_db(text, model_name)
+            if not embedding_entry:
+                embedding_entry = TextEmbedding(text=text, model_name=model_name, embedding_json=json.dumps(embedding), document_id=document_embedding.id)
+                session.add(embedding_entry)
+        await session.commit()
+        
 @app.exception_handler(SQLAlchemyError)
 async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError):
     logger.exception(exc)
@@ -440,6 +494,8 @@ async def general_exception_handler(request: Request, exc: Exception):
 @app.get("/", include_in_schema=False)
 async def custom_swagger_ui_html():
     return fastapi.templating.get_swagger_ui_html(openapi_url="/openapi.json", title=app.title, swagger_favicon_url=app.swagger_ui_favicon_url)
+
+
 
 @app.get("/get_list_of_available_model_names/",
          summary="Retrieve Available Model Names",
@@ -468,6 +524,7 @@ async def get_list_of_available_model_names(token: str = None):
     model_files = glob.glob(os.path.join(models_dir, "*.bin")) # Find all files with .ggmlv3.q3_K_L.bin extension
     model_names = [os.path.splitext(os.path.splitext(os.path.basename(model_file))[0])[0] for model_file in model_files] # Remove both extensions
     return {"model_names": model_names}
+
 
 
 @app.get("/get_all_stored_strings/",
@@ -505,6 +562,7 @@ async def get_all_stored_strings(req: Request, token: str = None) -> AllStringsR
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
+
 @app.get("/get_all_stored_documents_with_embeddings/",
          summary="Retrieve All Documents with Embeddings",
          description="""Retrieve a list of all stored documents from the database for which embeddings have been computed.
@@ -538,6 +596,7 @@ async def get_all_stored_documents_with_embeddings(req: Request, token: str = No
         logger.error(f"An error occurred while processing the request: {e}")
         logger.error(traceback.format_exc())  # Print the traceback
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
 
 
 @app.post("/get_embedding_vector/",
@@ -581,6 +640,7 @@ async def get_embedding_vector(request: EmbeddingRequest, req: Request = None, t
         logger.error(f"An error occurred while processing the request: {e}")
         logger.error(traceback.format_exc()) # Print the traceback
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
 
 
 @app.post("/compute_similarity_between_strings/",
@@ -654,44 +714,61 @@ async def compute_similarity_between_strings(request: SimilarityRequest, req: Re
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
+
 @app.post("/get_most_similar_string_from_database/",
           response_model=SimilarStringResponse,
-          summary="Get Most Similar String from Database",
-          description="""Find the most similar string in the database to the given input text. This endpoint uses a pre-computed FAISS index to quickly search for the closest matching string.
+          summary="Get Most Similar Strings from Database",
+          description="""Find the most similar strings in the database to the given input text. This endpoint uses a pre-computed FAISS index to quickly search for the closest matching strings.
+          # Additional details and examples here...
+          """,
+          response_description="A JSON object containing the most similar strings and similarity scores.")
+
+
+
+@app.post("/get_most_similar_string_from_database/",
+          response_model=SimilarStringResponse,
+          summary="Get Most Similar Strings from Database",
+          description="""Find the most similar strings in the database to the given input text. This endpoint uses a pre-computed FAISS index to quickly search for the closest matching strings.
 
 ### Parameters:
-- `request`: A JSON object containing the input text and model name.
+- `request`: A JSON object containing the input text, model name, and an optional number of most similar strings to return.
 - `req`: HTTP request object (internal use).
 - `token`: Security token (optional).
 
 ### Request JSON Format:
 The request must contain the following attributes:
 - `text`: The input text for which to find the most similar string.
-- `model_name`: The model used to calculate embeddings (optional).
+- `model_name`: The model used to calculate embeddings.
+- `number_of_most_similar_strings_to_return`: (Optional) The number of most similar strings to return, defaults to 3.
 
-### Example (note that `model_name` is optional):
+### Example:
 ```json
 {
   "text": "Find me the most similar string!",
-  "model_name": "llama2_7b_chat_uncensored"
+  "model_name": "llama2_7b_chat_uncensored",
+  "number_of_most_similar_strings_to_return": 5
 }
 ```
 
 ### Response:
-The response will include the most similar string found in the database, along with the similarity score.
+The response will include the most similar strings found in the database, along with the similarity scores.
 
 ### Example Response:
 ```json
 {
-  "text": "This is the most similar string!",
-  "similarity": 0.9823
+  "results": [
+    {"text": "This is the most similar string!", "similarity": 0.9823},
+    {"text": "Another similar string.", "similarity": 0.9721},
+    ...
+  ]
 }
 ```""",
-          response_description="A JSON object containing the most similar string and similarity score.")
-# @app.post("/get_most_similar_string_from_database/", response_model=SimilarStringResponse)
+          response_description="A JSON object containing the most similar strings and similarity scores.")
 async def get_most_similar_string_from_database(request: SimilarStringRequest, req: Request, token: str = None) -> SimilarStringResponse:
-    global faiss_index
-    logger.info(f"Received request to find most similar string for: {request.text}")
+    global faiss_indexes, associated_texts_by_model
+    model_name = request.model_name
+    num_results = request.number_of_most_similar_strings_to_return
+    logger.info(f"Received request to find {num_results} most similar strings for: {request.text} using model: {model_name}")
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
         raise HTTPException(status_code=403, detail="Unauthorized")
     try:
@@ -701,19 +778,23 @@ async def get_most_similar_string_from_database(request: SimilarStringRequest, r
         input_embedding = np.array(embedding_response["embedding"]).astype('float32').reshape(1, -1)
         faiss.normalize_L2(input_embedding)  # Normalize the input vector for cosine similarity
         logger.info(f"Computed embedding for input text: {request.text}")
+        faiss_index = faiss_indexes.get(model_name)  # Retrieve the correct FAISS index for the model_name
+        if faiss_index is None:
+            raise HTTPException(status_code=400, detail=f"No FAISS index found for model: {model_name}")
         logger.info("Searching for the most similar string in the FAISS index")
-        similarities, indices = faiss_index.search(input_embedding.reshape(1, -1), 1)
-        similarity = similarities[0][0]  # Get the similarity value
-        most_similar_text = associated_texts[indices[0][0]]  # Retrieve text using the index from FAISS search
-        logger.info(f"Found most similar string: {most_similar_text} with similarity: {similarity}")
-        return {
-            "text": most_similar_text,
-            "similarity": similarity
-        }
+        similarities, indices = faiss_index.search(input_embedding.reshape(1, -1), num_results)  # Search for num_results similar strings
+        results = []
+        for i in range(num_results):
+            similarity = float(similarities[0][i])  # Convert numpy.float32 to native float
+            most_similar_text = associated_texts_by_model[model_name][indices[0][i]]
+            results.append({"text": most_similar_text, "similarity": similarity})
+        logger.info(f"Found most similar strings: {results}")
+        return {"results": results}
     except Exception as e:
         logger.error(f"An error occurred while processing the request: {e}")
         logger.error(traceback.format_exc())  # Print the traceback
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
 
 
 @app.post("/get_all_embeddings_for_document/",
@@ -739,9 +820,8 @@ The format of the JSON string:
 ### Examples:
 - Plain Text: Submit a file containing plain text.
 - PDF: Submit a `.pdf` file (OCR not supported).""",
-          response_description="A JSON object containing a download link for the embeddings file.")
-# @app.post("/get_all_embeddings_for_document/")
-async def get_all_embeddings_for_document(file: UploadFile = File(...), model_name: str = DEFAULT_MODEL_NAME, json_format: str = 'records', token: str = None, background_tasks: BackgroundTasks = None, req: Request = None) -> DownloadLinkResponse:
+          response_description="A ZIP file containing the embeddings file.")
+async def get_all_embeddings_for_document(file: UploadFile = File(...), model_name: str = DEFAULT_MODEL_NAME, json_format: str = 'records', token: str = None, background_tasks: BackgroundTasks = None, req: Request = None):
     client_ip = req.client.host if req else "localhost"
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN): raise HTTPException(status_code=403, detail="Unauthorized")
     temp_file_path = tempfile.mktemp() # Write uploaded file to a temporary file
@@ -750,131 +830,64 @@ async def get_all_embeddings_for_document(file: UploadFile = File(...), model_na
         chunk = await file.read(chunk_size)
         while chunk:
             buffer.write(chunk)
-            chunk = await file.read(chunk_size)            
-    mime = Magic(mime=True) # Determine file type using magic
-    mime_type = mime.from_file(temp_file_path)
-    logger.info(f"Received request to extract embeddings for document {file.filename} with MIME type: {mime_type} and size: {os.path.getsize(temp_file_path)} bytes from IP address: {client_ip}") 
-    hash_obj = sha3_256()
-    strings = []
-    if mime_type == 'application/pdf':
-        logger.info("Processing PDF file")
-        with open(temp_file_path, 'rb') as buffer:
-            pdf_reader = PyPDF2.PdfReader(buffer)
-            content = ""
-            for page_num in range(len(pdf_reader.pages)):
-                page = pdf_reader.pages[page_num]
-                page_content = page.extract_text()
-                content += page_content
-                hash_obj.update(page_content.encode())
-            file_hash = hash_obj.hexdigest()
-            strings = [s.strip() for s in content.replace(". ", ".\n").split('\n') if len(s.strip()) > MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING]
-            logger.info(f"Extracted {len(strings)} strings from PDF file")
-    elif mime_type.startswith('text/'):
-        logger.info("Processing plain text file")
-        with open(temp_file_path, 'r') as buffer:
-            for line in buffer:
-                hash_obj.update(line.encode())
-                line = line.strip()
-                if len(line) > MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING:
-                    strings.append(line)
-            logger.info(f"Extracted {len(strings)} strings from plain text file")
-        file_hash = hash_obj.hexdigest()
-    else:
-        raise HTTPException(status_code=400, detail="Unsupported file type")
+            chunk = await file.read(chunk_size)
+    hash_obj = sha3_256() # Calculate SHA3-256 hash of the file
+    with open(temp_file_path, 'rb') as buffer:
+        for chunk in iter(lambda: buffer.read(chunk_size), b''):
+            hash_obj.update(chunk)
+    file_hash = hash_obj.hexdigest()
     logger.info(f"SHA3-256 hash of submitted file: {file_hash}")
     async with AsyncSessionLocal() as session: # Check if the document has been processed before
-        result = await session.execute( select(DocumentEmbedding).filter(DocumentEmbedding.file_hash == file_hash) )
+        result = await session.execute(select(DocumentEmbedding).filter(DocumentEmbedding.file_hash == file_hash, DocumentEmbedding.model_name == model_name))
         existing_document_embedding = result.scalar_one_or_none()
         if existing_document_embedding: # If the document has been processed before, return the existing result
-            logger.info(f"Found existing document embedding for file hash: {file_hash}, so returning the existing result without re-computing")
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
-            temp_file.write(json.dumps(existing_document_embedding.results_json).encode())
-            temp_file.close()
-            background_tasks.add_task(os.remove, temp_file.name)  # Schedule the temp file for deletion after the response is sent
-            download_code = uuid4().hex # Generate download link for the existing file
-            zip_file_path = f"/tmp/{file.filename}.zip" # Create a ZIP file containing the JSON file
-            with zipfile.ZipFile(zip_file_path, 'w') as zipf:
-                zipf.write(temp_file.name, os.path.basename(temp_file.name))
-            download_codes[download_code] = zip_file_path # Save the download code and ZIP file path
-            download_link = f"/download/{download_code}" # Generate a download link using the code
-            return DownloadLinkResponse(download_link=download_link)
-    logger.info(f"Document embedding for file hash: {file_hash} not found, so computing it now")
-    with open(temp_file_path, 'rb') as file_buffer:
-        original_file_content = file_buffer.read() # Read the content of the original file
-    results = []
-    if USE_PARALLEL_INFERENCE_QUEUE: # Use a parallel inference queue if the setting is enabled
-        logger.info(f"Using parallel inference queue to compute embeddings for {len(strings)} strings")
-        start_time = time.perf_counter() # Record the start time
-        semaphore = asyncio.Semaphore(MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS)
-        async def compute_embedding(text):  # Define a function to compute the embedding for a given text
-            try:
-                async with semaphore:  # Acquire a semaphore slot
-                    request = EmbeddingRequest(text=text, model_name=model_name)
-                    embedding = await get_embedding_vector(request, client_ip=client_ip)
-                    return text, embedding["embedding"]
-            except Exception as e:
-                logger.error(f"Error computing embedding for text '{text}': {e}")
-                return text, None
-        results = await asyncio.gather( *[compute_embedding(s) for s in strings] ) # Use asyncio.gather to run the tasks concurrently, respecting the semaphore limit
-        end_time = time.perf_counter() # Record the end time   
-        duration = end_time - start_time
-        logger.info(f"Parallel inference task for {len(strings)} strings completed in {duration:.2f} seconds")
-    else:  # Compute embeddings sequentially
-        logger.info(f"Using sequential inference to compute embeddings for {len(strings)} strings")
-        start_time = time.perf_counter() # Record the start time
-        for s in strings:
-            embedding_request = EmbeddingRequest(text=s, model_name=model_name)
-            embedding = await get_embedding_vector(embedding_request, client_ip=client_ip)
-            results.append((s, embedding["embedding"]))
-        end_time = time.perf_counter() # Record the end time   
-        duration = end_time - start_time
-        logger.info(f"Sequential inference task for {len(strings)} strings completed in {duration:.2f} seconds")
-    results = [(text, embedding) for text, embedding in results if embedding is not None] # Filter out results with None embeddings (applicable to parallel processing)
-    df = pd.DataFrame(results, columns=['text', 'embedding'])
-    json_content = df.to_json(orient=json_format or 'records')
-    logger.info(f"Now storing the embedding results in the database for file hash: {file_hash}")
-    results_json_object = json.loads(json_content) # Convert the JSON content to a Python object
-    async with AsyncSessionLocal() as session:
-        document = Document()
-        session.add(document)
-        await session.flush() # Use the original_file_content variable to store the content of the original file and the results_json_object to store the results JSON:
-        document_embedding = DocumentEmbedding(document_id=document.id, filename=file.filename, mimetype=file.content_type, file_hash=file_hash, file_data=original_file_content, results_json=results_json_object)        
-        session.add(document_embedding)
-        await session.flush()
-        for text, embedding in results:
-            embedding_entry = await _get_embedding_from_db(text, model_name)
-            if not embedding_entry:
-                embedding_entry = TextEmbedding(text=text, model_name=model_name, embedding_json=json.dumps(embedding), document_id=document_embedding.id)
-                session.add(embedding_entry)
-        await session.commit()
-    logger.info(f"Document embedding for file hash: {file_hash} stored in the database")
-    logger.info(f"Returning the document embedding results to the client as a link to a zipped JSON file")
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
-    temp_file.write(json_content.encode())
+            logger.info(f"Document {file.filename} has been processed before, returning existing result")
+            json_content = json.dumps(existing_document_embedding.results_json).encode()
+        else: # If the document has not been processed, continue processing
+            mime = Magic(mime=True) # Determine file type using magic
+            mime_type = mime.from_file(temp_file_path)
+            logger.info(f"Received request to extract embeddings for document {file.filename} with MIME type: {mime_type} and size: {os.path.getsize(temp_file_path)} bytes from IP address: {client_ip}")
+            strings = []
+            if mime_type == 'application/pdf':
+                logger.info("Processing PDF file")
+                with open(temp_file_path, 'rb') as buffer:
+                    pdf_reader = PyPDF2.PdfReader(buffer)
+                    content = ""
+                    for page_num in range(len(pdf_reader.pages)):
+                        page = pdf_reader.pages[page_num]
+                        page_content = page.extract_text()
+                        content += page_content
+                        hash_obj.update(page_content.encode())
+                    file_hash = hash_obj.hexdigest()
+                    strings = [s.strip() for s in content.replace(". ", ".\n").split('\n') if len(s.strip()) > MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING]
+                    logger.info(f"Extracted {len(strings)} strings from PDF file")
+            elif mime_type.startswith('text/'):
+                logger.info("Processing plain text file")
+                with open(temp_file_path, 'r') as buffer:
+                    for line in buffer:
+                        hash_obj.update(line.encode())
+                        line = line.strip()
+                        if len(line) > MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING:
+                            strings.append(line)
+                    logger.info(f"Extracted {len(strings)} strings from plain text file")
+                file_hash = hash_obj.hexdigest()
+            else:
+                raise HTTPException(status_code=400, detail="Unsupported file type")
+            results = await compute_embeddings_for_document(strings, model_name, client_ip) # Compute the embeddings and json_content for new documents
+            df = pd.DataFrame(results, columns=['text', 'embedding'])
+            json_content = df.to_json(orient=json_format or 'records').encode()
+            with open(temp_file_path, 'rb') as file_buffer: # Store the results in the database
+                original_file_content = file_buffer.read()
+            await store_document_embeddings_in_db(file, file_hash, original_file_content, json_content, results, model_name)
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".json") # Create a temporary JSON file
+    temp_file.write(json_content)
     temp_file.close()
-    background_tasks.add_task(os.remove, temp_file.name)  # Schedule the temp files for deletion after the response is sent
-    background_tasks.add_task(os.remove, temp_file_path)
-    download_code = uuid4().hex # Generate a random download code
-    temp_file_name = f"{file.filename}.json"
-    temp_file_path = f"/tmp/{temp_file_name}"
-    with open(temp_file_path, 'wb') as buffer:
-        buffer.write(json_content.encode())
-    zip_file_path = f"/tmp/{file.filename}.zip" # Create a ZIP file containing the JSON file
+    zip_file_path = f"/tmp/{file.filename}.zip"  # Create a ZIP file containing the JSON file
     with zipfile.ZipFile(zip_file_path, 'w') as zipf:
-        zipf.write(temp_file_path, os.path.basename(temp_file_path))
-    download_codes[download_code] = zip_file_path # Save the download code and ZIP file path
-    download_link = f"/download/{download_code}" # Generate a download link using the code
-    logger.info(f"Download link generated: {download_link}")
-    return DownloadLinkResponse(download_link=download_link)             
-
-
-@app.get("/download/{download_code}")
-async def download_file(download_code: str) -> FileResponse:
-    file_path = download_codes.get(download_code)
-    if not file_path or not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found")
-    del download_codes[download_code] # Remove the download code after it's used
-    return FileResponse(file_path, headers={"Content-Disposition": f"attachment; filename={os.path.basename(file_path)}"})
+        zipf.write(temp_file.name, os.path.basename(temp_file.name))
+    background_tasks.add_task(os.remove, temp_file.name) # Schedule the temp files for deletion after the response is sent
+    background_tasks.add_task(os.remove, temp_file_path) # Return the ZIP file as a download:
+    return FileResponse(zip_file_path, headers={"Content-Disposition": f"attachment; filename={file.filename}.zip"})
 
 
 @app.post("/clear_ramdisk/")
@@ -885,6 +898,7 @@ async def clear_ramdisk_endpoint(token: str = None):
         clear_ramdisk()
         return {"message": "RAM Disk cleared successfully."}
     return {"message": "RAM Disk usage is disabled."}
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -900,7 +914,7 @@ async def startup_event():
         except FileNotFoundError as e:
             logger.error(e)
     await initialize_db()
-    await build_faiss_index() 
+    await build_faiss_indexes() 
     
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=LLAMA_EMBEDDING_SERVER_LISTEN_PORT)
