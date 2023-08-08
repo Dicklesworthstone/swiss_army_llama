@@ -187,13 +187,12 @@ async def build_faiss_indexes():
             faiss_index.add(embeddings_array)
             logger.info(f"Faiss index built for model {model_name}.")
             faiss_indexes[model_name] = faiss_index  # Store the index by model name
-
+            
 class TextEmbedding(Base):
     __tablename__ = "embeddings"
-    id = Column(Integer, primary_key=True, index=True)  
-    text = Column(String, index=True) 
-    text_hash = Column(String, index=True)
-    model_name = Column(String, index=True) 
+    id = Column(Integer, primary_key=True, index=True)
+    text = Column(String, index=True)
+    model_name = Column(String, index=True)
     embedding_json = Column(String)
     ip_address = Column(String)
     request_time = Column(DateTime)
@@ -201,9 +200,9 @@ class TextEmbedding(Base):
     total_time = Column(Float)
     document_id = Column(Integer, ForeignKey('document_embeddings.id'))
     document = relationship("DocumentEmbedding", back_populates="embeddings")
-    __table_args__ = (UniqueConstraint('text_hash', 'model_name', name='_text_hash_model_uc'),)
+    __table_args__ = (UniqueConstraint('text', 'model_name', name='_text_model_uc'),) # Unique constraint on text and model_name    
     @hybrid_property
-    def text_hash(self): # Hybrid property to automatically compute the hash when the text is set
+    def text_hash(self):  # Hybrid property to automatically compute the hash when the text is set
         return sha3_256(self.text.encode('utf-8')).hexdigest()
         
 class DocumentEmbedding(Base):
