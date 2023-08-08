@@ -24,6 +24,7 @@ from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.exc import SQLAlchemyError, OperationalError
+import faiss
 
 # Note: the Ramdisk setup and teardown requires sudo; to enable password-less sudo, edit your sudoers file with `sudo visudo`.
 # Add the following lines, replacing username with your actual username
@@ -52,66 +53,78 @@ RAMDISK_PATH = "/mnt/ramdisk"
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 1
 model_cache = {} # Model cache to store loaded models
+faiss_index = None
+associated_texts = []
 logger.info(f"USE_RAMDISK is set to: {USE_RAMDISK}")
 
-
-def setup_ramdisk():
-    total_ram_gb = psutil.virtual_memory().total / (1024 ** 3)  # Check total and available RAM; Total RAM in GB
-    available_ram_gb = psutil.virtual_memory().available / (1024 ** 3)  # Available RAM in GB
-    ramdisk_size_gb = min(RAMDISK_SIZE_IN_GB, available_ram_gb - 2)  # Determine the appropriate RAM disk size; leave 2G of RAM free
-    ramdisk_size_mb = int(ramdisk_size_gb * 1024)  # Convert the size to MB
-    ramdisk_size_str = f"{ramdisk_size_mb}M"  # Format the size as a string with megabytes
-    if RAMDISK_SIZE_IN_GB > total_ram_gb:
-        raise ValueError(f"Cannot allocate {RAMDISK_SIZE_IN_GB}G for RAM Disk. Total system RAM is {total_ram_gb:.2f}G.")
-    logger.info("Setting up RAM Disk...")
-    os.makedirs(RAMDISK_PATH, exist_ok=True)
-    try: # Try to set up the RAM Disk
-        subprocess.run(["sudo", "mount", "-t", "tmpfs", "-o", f"size={ramdisk_size_str}", "tmpfs", RAMDISK_PATH], check=True)
-        logger.info(f"RAM Disk set up at {RAMDISK_PATH} with size {ramdisk_size_gb}G")
-    except subprocess.CalledProcessError as e:
-        if os.path.ismount(RAMDISK_PATH): # If there's a failure and RAM Disk already exists, attempt to unmount and try again
-            logger.error(f"Failed to set up RAM Disk, but an existing RAM Disk was found. Attempting to unmount and try again...")
-            subprocess.run(["sudo", "umount", RAMDISK_PATH], check=False)
-            subprocess.run(["sudo", "mount", "-t", "tmpfs", "-o", f"size={ramdisk_size_str}", "tmpfs", RAMDISK_PATH], check=True)
-            logger.info(f"RAM Disk set up at {RAMDISK_PATH} with size {ramdisk_size_gb}G")
-        else:
-            logger.error(f"Failed to set up RAM Disk: {e}")
-            logger.error(f"Command output: {e.output}")
-            raise
-
-def clear_ramdisk():
-    logger.info("Clearing RAM Disk...")
-    try:
-        subprocess.run(f"sudo umount {RAMDISK_PATH}", shell=True, check=True)
-        logger.info("RAM Disk cleared.")
-    except subprocess.CalledProcessError:
-        logger.error("Failed to clear RAM Disk.")
-        raise
-
-class EmbeddingRequest(BaseModel):
-    text: str
-    model_name: str = DEFAULT_MODEL_NAME
-
 app = FastAPI(docs_url="/")  # Set the Swagger UI to root
-
 engine = create_async_engine(DATABASE_URL, echo=True)
 AsyncSessionLocal = sessionmaker(
     bind=engine,
     class_=AsyncSession,
     expire_on_commit=False,
 )
-
 Base = declarative_base()
 
-class EmbeddingResponse(BaseModel):
-    embedding: List[float]
+def setup_ramdisk():
+    total_ram_gb = psutil.virtual_memory().total / (1024 ** 3)
+    free_ram_gb = psutil.virtual_memory().free / (1024 ** 3)
+    buffer_gb = 2  # buffer to ensure we don't use all the free RAM
+    ramdisk_size_gb = max(min(RAMDISK_SIZE_IN_GB, free_ram_gb - buffer_gb), 0.1)
+    ramdisk_size_mb = int(ramdisk_size_gb * 1024)
+    ramdisk_size_str = f"{ramdisk_size_mb}M"
+    logger.info(f"Total RAM: {total_ram_gb}G")
+    logger.info(f"Free RAM: {free_ram_gb}G")
+    logger.info(f"Calculated RAM Disk Size: {ramdisk_size_gb}G")
+    if RAMDISK_SIZE_IN_GB > total_ram_gb:
+        raise ValueError(f"Cannot allocate {RAMDISK_SIZE_IN_GB}G for RAM Disk. Total system RAM is {total_ram_gb:.2f}G.")
+    logger.info("Setting up RAM Disk...")
+    os.makedirs(RAMDISK_PATH, exist_ok=True)
+    mount_command = ["sudo", "mount", "-t", "tmpfs", "-o", f"size={ramdisk_size_str}", "tmpfs", RAMDISK_PATH]
+    subprocess.run(mount_command, check=True)
+    logger.info(f"RAM Disk set up at {RAMDISK_PATH} with size {ramdisk_size_gb}G")
 
-class SimilarityResponse(BaseModel):
-    text1: str
-    text2: str
-    embedding1: List[float]
-    embedding2: List[float]
-    similarity: float
+def copy_models_to_ramdisk(models_directory, ramdisk_directory):
+    total_size = sum(os.path.getsize(os.path.join(models_directory, model)) for model in os.listdir(models_directory))
+    free_ram = psutil.virtual_memory().free
+    if total_size > free_ram:
+        logger.warning(f"Not enough space on RAM Disk. Required: {total_size}, Available: {free_ram}. Rebuilding RAM Disk.")
+        clear_ramdisk()
+        free_ram = psutil.virtual_memory().free  # Recompute the available RAM after clearing the RAM disk
+        if total_size > free_ram:
+            logger.error(f"Still not enough space on RAM Disk even after clearing. Required: {total_size}, Available: {free_ram}.")
+            raise ValueError("Not enough RAM space to copy models.")
+        setup_ramdisk()
+    os.makedirs(ramdisk_directory, exist_ok=True)
+    for model in os.listdir(models_directory):
+        shutil.copyfile(os.path.join(models_directory, model), os.path.join(ramdisk_directory, model))
+        logger.info(f"Copied model {model} to RAM Disk at {os.path.join(ramdisk_directory, model)}")
+
+def clear_ramdisk():
+    while True:
+        cmd_check = f"sudo mount | grep {RAMDISK_PATH}"
+        result = subprocess.run(cmd_check, shell=True, stdout=subprocess.PIPE).stdout.decode('utf-8')
+        if RAMDISK_PATH not in result:
+            break  # Exit the loop if the RAMDISK_PATH is not in the mount list
+        cmd_umount = f"sudo umount -l {RAMDISK_PATH}"
+        subprocess.run(cmd_umount, shell=True, check=True)
+    logger.info(f"Cleared RAM Disk at {RAMDISK_PATH}")
+
+async def build_faiss_index():
+    global faiss_index, associated_texts
+    embeddings = []
+    associated_texts = []
+    logger.info("Building Faiss index...")
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(sql_text("SELECT text, embedding_json FROM embeddings"))
+        for row in result.fetchall():
+            associated_texts.append(row[0])
+            embeddings.append(json.loads(row[1]))
+    embeddings = np.array(embeddings).astype('float32')
+    faiss.normalize_L2(embeddings)  # Normalize the vectors for cosine similarity
+    faiss_index = faiss.IndexFlatIP(embeddings.shape[1])  # Use IndexFlatIP for cosine similarity
+    faiss_index.add(embeddings)
+    logger.info("Faiss index built.")
 
 class TextEmbedding(Base):
     __tablename__ = "embeddings"
@@ -124,11 +137,37 @@ class TextEmbedding(Base):
     response_time = Column(DateTime)
     total_time = Column(Float)
     __table_args__ = (UniqueConstraint('text', 'model_name', name='_text_model_uc'),) # Unique constraint on text and model_name
+    
+class EmbeddingResponse(BaseModel):
+    embedding: List[float]
+
+class SimilarityResponse(BaseModel):
+    text1: str
+    text2: str
+    embedding1: List[float]
+    embedding2: List[float]
+    similarity: float
+    
+class SimilarStringResponse(BaseModel):
+    text: str
+    similarity: float
+    message: str = ""
+
+class AllStringsResponse(BaseModel):
+    strings: List[str]
+
+class EmbeddingRequest(BaseModel):
+    text: str
+    model_name: str = DEFAULT_MODEL_NAME
 
 class SimilarityRequest(BaseModel):
     text1: str
     text2: str
     model_name: Optional[str] = DEFAULT_MODEL_NAME
+
+class SimilarStringRequest(BaseModel):
+    text: str
+    model_name: str = DEFAULT_MODEL_NAME
 
 async def execute_with_retry(func, *args, **kwargs):
     retries = 0
@@ -180,15 +219,7 @@ def download_models():
         logger.info("RAM Disk is enabled. Checking RAM Disk for models...")
         ramdisk_models_dir = os.path.join(RAMDISK_PATH, 'models')
         os.makedirs(ramdisk_models_dir, exist_ok=True)
-        for model_name_with_extension in model_names:
-            filename = os.path.join(models_dir, model_name_with_extension)
-            ramdisk_filename = os.path.join(ramdisk_models_dir, model_name_with_extension)
-            if not os.path.exists(ramdisk_filename):
-                logger.info(f"Copying model {model_name_with_extension} to RAM Disk at {ramdisk_filename}...")
-                shutil.copyfile(filename, ramdisk_filename)
-                logger.info(f"Copied model {model_name_with_extension} to RAM Disk at {ramdisk_filename}")
-            else:
-                logger.info(f"Model {model_name_with_extension} already exists in RAM Disk at {ramdisk_filename}")
+        copy_models_to_ramdisk(models_dir, ramdisk_models_dir)
     logger.info("Model downloads completed.")
     return model_names
 
@@ -322,6 +353,23 @@ async def get_list_of_available_model_names(token: str = None):
     model_names = [os.path.splitext(os.path.splitext(os.path.basename(model_file))[0])[0] for model_file in model_files] # Remove both extensions
     return {"model_names": model_names}
 
+@app.get("/get_all_strings_with_embeddings/", response_model=AllStringsResponse)
+async def get_all_strings_with_embeddings(req: Request, token: str = None):
+    logger.info("Received request to retrieve all strings with computed embeddings")
+    if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    try:
+        logger.info("Retrieving all strings with computed embeddings from the database")
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(sql_text("SELECT DISTINCT text FROM embeddings"))
+            all_strings = [row[0] for row in result.fetchall()]
+        logger.info(f"Retrieved {len(all_strings)} strings with computed embeddings from the database")
+        return {"strings": all_strings}
+    except Exception as e:
+        logger.error(f"An error occurred while processing the request: {e}")
+        logger.error(traceback.format_exc())  # Print the traceback
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
 @app.post("/get_embedding_vector/", response_model=EmbeddingResponse)
 async def get_embedding_vector(request: EmbeddingRequest, req: Request, token: str = None):
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
@@ -339,20 +387,20 @@ async def compute_similarity_between_strings(request: SimilarityRequest, token: 
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
         raise HTTPException(status_code=403, detail="Unauthorized")
     try:
-        # Create embedding requests for both texts
+        logger.info("Computing similarity between strings")
         embedding_request1 = EmbeddingRequest(text=request.text1, model_name=request.model_name)
         embedding_request2 = EmbeddingRequest(text=request.text2, model_name=request.model_name)
-        # Compute embeddings using the get_or_compute_embedding function
+        logger.info(f"Requesting embeddings for: {embedding_request1} and {embedding_request2}")
         embedding1_response = await get_or_compute_embedding(embedding_request1, None)
         embedding2_response = await get_or_compute_embedding(embedding_request2, None)
-        # Extract the embedding vectors
+        logger.info(f"Received embeddings: {embedding1_response} and {embedding2_response}")
         embedding1 = np.array(embedding1_response["embedding"])
         embedding2 = np.array(embedding2_response["embedding"])
-        # Ensure the embeddings are valid before computing similarity
+        logger.info(f"Embedding1 size: {embedding1.size}, embedding2 size: {embedding2.size}")
         if embedding1.size == 0 or embedding2.size == 0:
             raise HTTPException(status_code=400, detail="Could not calculate embeddings for the given texts")
-        # Compute the cosine similarity
         similarity = cosine_similarity([embedding1], [embedding2])
+        logger.info(f"Cosine Similarity: {similarity}")
         return {
             "text1": request.text1,
             "text2": request.text2,
@@ -363,6 +411,33 @@ async def compute_similarity_between_strings(request: SimilarityRequest, token: 
     except Exception as e:
         logger.error(f"An error occurred while processing the request: {e}")
         traceback.print_exc() # Print the traceback to see where the error occurred
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@app.post("/get_most_similar_string_from_database/", response_model=SimilarStringResponse)
+async def get_most_similar_string_from_database(request: SimilarStringRequest, req: Request, token: str = None):
+    global faiss_index
+    logger.info(f"Received request to find most similar string for: {request.text}")
+    if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    try:
+        logger.info(f"Computing embedding for input text: {request.text}")
+        embedding_request = EmbeddingRequest(text=request.text, model_name=request.model_name)
+        embedding_response = await get_embedding_vector(embedding_request, req)
+        input_embedding = np.array(embedding_response["embedding"]).astype('float32').reshape(1, -1)
+        faiss.normalize_L2(input_embedding)  # Normalize the input vector for cosine similarity
+        logger.info(f"Computed embedding for input text: {request.text}")
+        logger.info("Searching for the most similar string in the FAISS index")
+        similarities, indices = faiss_index.search(input_embedding.reshape(1, -1), 1)
+        similarity = similarities[0][0]  # Get the similarity value
+        most_similar_text = associated_texts[indices[0][0]]  # Retrieve text using the index from FAISS search
+        logger.info(f"Found most similar string: {most_similar_text} with similarity: {similarity}")
+        return {
+            "text": most_similar_text,
+            "similarity": similarity
+        }
+    except Exception as e:
+        logger.error(f"An error occurred while processing the request: {e}")
+        logger.error(traceback.format_exc())  # Print the traceback
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @app.get("/", include_in_schema=False)
@@ -389,6 +464,7 @@ async def startup_event():
         except FileNotFoundError as e:
             logger.error(e)
     await initialize_db()
-
+    await build_faiss_index() 
+    
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=LLAMA_EMBEDDING_SERVER_LISTEN_PORT)
