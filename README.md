@@ -16,27 +16,13 @@
 
 ## Introduction
 
-The LLama Embedding Server is a sophisticated service designed to facilitate and optimize the process of obtaining text embeddings using different Large Language Models (LLMs) such as LLama_cpp and langchain. This service is built on top of FastAPI and provides a sleek and user-friendly interface to interact with LLMs.
-
-The driving motivation behind this project is to offer an efficient and streamlined approach to perform various text-related tasks. Whether it's retrieving embeddings, computing similarities between strings, or searching for the most analogous string within cached embeddings, the LLama Embedding Server has it all covered.
-
-### Why It's Useful
-
-1. **Ease of Access**: By wrapping complex models like llama_cpp and langchain with a FastAPI service, users can easily interact with these models without delving into intricate details. This encourages wider usage and experimentation.
-
-2. **Computational Efficiency**: Repeated computation of embeddings for identical texts can be both time-consuming and resource-intensive. The LLama Embedding Server smartly caches these results, thereby avoiding redundant computations and significantly reducing both time and computational overhead.
-
-3. **Versatile Functionality**: Beyond mere embedding retrieval, the service offers valuable utilities like computing similarities between strings and searching cached string embeddings for the most similar to a given query. These functionalities can be vital in various Natural Language Processing (NLP) applications, such as semantic search, text clustering, and more.
-
-4. **Scalable and Robust**: Built with scalability in mind, the service can handle concurrent requests efficiently. Its robust design ensures smooth operation and precise error handling, making it suitable for both experimental and production environments.
-
-In essence, the LLama Embedding Server not only makes working with LLMs like llama_cpp and langchain more accessible but also introduces an intelligent layer of optimization and utility functions. It stands as a valuable tool for researchers, developers, and anyone interested in leveraging the power of Large Language Models in an efficient and user-friendly manner.
+The LLama2 Embedding Server is designed to facilitate and optimize the process of obtaining text embeddings using different LLMs via llama_cpp and langchain. The driving motivation behind this project is to offer a convenient and easy to use API to quickly and easily submit text strings and get back embeddings using Llama2 and similar LLMs. To avoid wasting computation, these embeddings are cached in SQlite and retrieved if they have already been computed before. To speed up the process of loading multiple LLMs, optional RAM Disks can be used, and the process for creating and managing them is handled automatically for you. Finally, some additional useful endpoints are provided, such as computing semantic similarity between submitted text strings, and semantic search across all your cached embeddings using FAISS vector searching. 
 
 ---
 
 ## Features
 
-1. **Text Embedding Computation**: Using pre-trained LLama models to compute embeddings for any given text.
+1. **Text Embedding Computation**: Using pre-trained LLama2 (and other) models to compute embeddings for any given text.
 2. **Embedding Caching**: Storing computed embeddings in a SQLite database to eliminate redundant computations.
 3. **Similarity Measurements**: Computing the cosine similarity between two strings.
 4. **Most Similar String Retrieval**: Finding the most similar string in the database compared to a given input.
@@ -81,7 +67,7 @@ The following endpoints are available:
 - **POST `/get_most_similar_string_from_database/`**: Finds the most similar string from the database.
 - **POST `/clear_ramdisk/`**: Clears the RAM Disk if it is enabled.
 
-For detailed request and response schemas, please refer to the Swagger UI available at the root URL.
+For detailed request and response schemas, please refer to the Swagger UI available at the root URL or the section at the end of this `README`.
 
 ## RAM Disk Management
 
