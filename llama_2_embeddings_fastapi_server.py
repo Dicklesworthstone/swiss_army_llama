@@ -108,6 +108,13 @@ Base = declarative_base()
 class DatabaseWriter:
     def __init__(self, queue):
         self.queue = queue
+        self.processing_text_hashes = set() # Set to store text hashes that are currently being processed
+    def _get_hash_from_operation(self, operation):
+        if isinstance(operation, TextEmbedding):  # Extract text_hash for TextEmbedding objects
+            return getattr(operation, 'text_hash', None)
+        if isinstance(operation, DocumentEmbedding):  # Extract file_hash for DocumentEmbedding objects
+            return getattr(operation, 'file_hash', None)
+        return None # Return None if the hash attribute is not found       
     async def dedicated_db_writer(self):
         while True:
             write_operations_batch, callback = await self.queue.get()
@@ -121,6 +128,8 @@ class DatabaseWriter:
                     await session.flush() # Flush to get the IDs
                     ids = [obj.id for obj in write_operations_batch]
                     await session.commit()
+                    for write_operation in write_operations_batch:
+                        self.processing_text_hashes.remove(write_operation.text_hash)
                 except IntegrityError as e:
                     if "UNIQUE constraint failed: embeddings.text_hash, embeddings.model_name" in str(e):
                         logger.warning(f"Embedding already exists in the database: {e}")
@@ -138,6 +147,13 @@ class DatabaseWriter:
                 if callback: # Invoke the callback with the IDs
                     callback(ids)
     async def enqueue_write(self, write_operations, callback=None):
+        write_operations = [op for op in write_operations if self._get_hash_from_operation(op) not in self.processing_text_hashes] # Filter out write operations for hashes that are already being processed
+        if not write_operations: # If there are no write operations left after filtering, return early
+            return
+        for op in write_operations:  # Add the hashes of the write operations to the set
+            hash_value = self._get_hash_from_operation(op)
+            if hash_value:
+                self.processing_text_hashes.add(hash_value)
         await self.queue.put((write_operations, callback))
 
 def check_that_user_has_required_permissions_to_manage_ramdisks():
@@ -400,7 +416,6 @@ async def save_embedding_to_db(text, model_name, embedding_json, ip_address, req
     existing_embedding = await get_embedding_from_db(text, model_name) # Check if the embedding already exists
     if existing_embedding is not None:
         return existing_embedding
-    logger.info(f"Saving embedding for '{text}' using model '{model_name}' to database...")
     return await execute_with_retry(_save_embedding_to_db, text, model_name, embedding_json, ip_address, request_time, response_time, total_time)
 
 async def _save_embedding_to_db(text, model_name, embedding_json, ip_address, request_time, response_time, total_time):
