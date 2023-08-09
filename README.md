@@ -225,6 +225,17 @@ Certainly! Here's a more comprehensive `README.md` section for using the Dockeri
 
 ### Dockerized Llama2 Embeddings API Service App
 
+A bash script is included in this repo, `setup_dockerized_app_on_fresh_machine.sh`, that will automatically do everything for you, including installing docker with apt install. 
+
+To use it, first make the script executable and then run it like this:
+
+```bash
+chmod +x setup_dockerized_app_on_fresh_machine.sh
+sudo ./setup_dockerized_app_on_fresh_machine.sh
+```
+
+If you prefer a manual setup, then read the following instructions:
+
 #### Prerequisites
 
 Ensure that you have Docker installed on your system. If not, follow these steps to install Docker on Ubuntu:
