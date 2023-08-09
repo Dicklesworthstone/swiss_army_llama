@@ -219,6 +219,69 @@ This section highlights the major performance enhancements integrated into the p
 - **Benefit**: Once embeddings are computed for a particular text, they are stored in the database, eliminating the need for re-computation during subsequent requests.
 - **Implementation**: When a request is made to compute an embedding, the system first checks the database. If the embedding for the given text is found, it is returned immediately, ensuring faster response times.
 
+Certainly! Here's a more comprehensive `README.md` section for using the Dockerized version of the Llama2 Embeddings API Service app:
+
+---
+
+### Dockerized Llama2 Embeddings API Service App
+
+#### Prerequisites
+
+Ensure that you have Docker installed on your system. If not, follow these steps to install Docker on Ubuntu:
+
+```bash
+sudo apt-get update
+sudo apt-get install docker.io
+sudo systemctl start docker
+sudo docker --version
+sudo usermod -aG docker $USER
+```
+
+You may need to log out and log back in or restart your system to apply the new group permissions, or use sudo in the following steps to build and run the container.
+
+#### Setup and Running the Application
+
+1. **Clone the Repository:**
+
+   Clone the Llama2 Embeddings API Service repository to your local machine:
+
+   ```bash
+   git clone https://github.com/Dicklesworthstone/llama_embeddings_fastapi_service
+   cd llama_embeddings_fastapi_service
+   ```
+
+2. **Build the Docker Image:**
+
+   Build the Docker image using the provided Dockerfile:
+
+   ```bash
+   sudo docker build -t llama-embeddings .
+   ```
+
+3. **Run the Docker Container:**
+
+   Run the Docker container, mapping the container's port 8089 to the host's port 8089:
+
+   ```bash
+   sudo docker run -p 8089:8089 llama-embeddings
+   ```
+
+4. **Accessing the Application:**
+
+   The FastAPI application will now be accessible at `http://localhost:8089` or at the static IP address of your VPS instance if you're running on one (You can get a 10-core, 30gb RAM, 1tb SSD with a static IP running Ubuntu 22.04 at Contabo for around $30/month, which is the cheapest I've found so far).
+
+   You can interact then with the API using tools like `curl` or by accessing the FastAPI documentation at `http://localhost:8089/docs`.
+
+6. **Viewing Logs:**
+
+   Logs from the application can be viewed directly in the terminal where you ran the `docker run` command.
+
+#### Stopping and Managing the Container
+
+- To stop the running container, press `Ctrl+C` in the terminal or find the container ID using `docker ps` and run `sudo docker stop <container_id>`.
+- To remove the built image, use `sudo docker rmi llama-embeddings`.
+
+---
 
 ## Endpoint Functionality and Workflow Overview
 Here's a detailed breakdown of the main endpoints provided by the LLama Embedding Server, explaining their functionality, input parameters, and how they interact with underlying models and systems:
