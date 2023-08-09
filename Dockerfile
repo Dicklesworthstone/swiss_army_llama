@@ -4,6 +4,10 @@ FROM python:3.9-slim-buster
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 
+# Upgrade pip and install wheel
+RUN python3 -m pip install --upgrade pip && \
+    python3 -m pip install wheel
+
 # Set working directory
 WORKDIR /app
 
@@ -27,4 +31,4 @@ COPY . .
 EXPOSE 8089
 
 # Command to run the application
-CMD ["python", "llama_2_embeddings_fastapi_server.py"]
+CMD ["python3", "llama_2_embeddings_fastapi_server.py"]
