@@ -4,6 +4,7 @@ import json
 import logging
 import os 
 import random
+import re
 import shutil
 import subprocess
 import tempfile
@@ -29,7 +30,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sqlalchemy import Column, String, Float, DateTime, Integer, UniqueConstraint, ForeignKey, LargeBinary, select
 from sqlalchemy import text as sql_text
 from sqlalchemy.dialects.sqlite import JSON
-from sqlalchemy.exc import SQLAlchemyError, OperationalError, IntegrityError
+from sqlalchemy.exc import SQLAlchemyError, OperationalError
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, validates
 import faiss
@@ -63,6 +64,8 @@ sh = logging.StreamHandler()
 sh.setFormatter(formatter)
 logger.addHandler(sh)
 logger = logging.getLogger(__name__)
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
+db_writer = None
 
 # Global variables
 use_hardcoded_security_token = 0
@@ -74,13 +77,14 @@ else:
 DATABASE_URL = "sqlite+aiosqlite:///embeddings.sqlite"
 LLAMA_EMBEDDING_SERVER_LISTEN_PORT = config("LLAMA_EMBEDDING_SERVER_LISTEN_PORT", default=8089, cast=int)
 DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="llama2_7b_chat_uncensored", cast=str) 
-MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING = config("MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING", default=50, cast=int)
+MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING = config("MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING", default=15, cast=int)
 USE_PARALLEL_INFERENCE_QUEUE = config("USE_PARALLEL_INFERENCE_QUEUE", default=False, cast=bool)
 MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS = config("MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS", default=10, cast=int)
 USE_RAMDISK = config("USE_RAMDISK", default=False, cast=bool)
 RAMDISK_SIZE_IN_GB = config("RAMDISK_SIZE_IN_GB", default=1, cast=int)
 RAMDISK_PATH = "/mnt/ramdisk"
 MAX_RETRIES = config("MAX_RETRIES", default=3, cast=int)
+DB_WRITE_BATCH_SIZE = config("DB_WRITE_BATCH_SIZE", default=100, cast=int) 
 RETRY_DELAY_BASE_SECONDS = config("RETRY_DELAY_BASE_SECONDS", default=1, cast=int)
 JITTER_FACTOR = config("JITTER_FACTOR", default=0.1, cast=float)
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
@@ -90,14 +94,47 @@ associated_texts = []
 download_codes = {} # Dictionary to store download codes and their corresponding file paths
 logger.info(f"USE_RAMDISK is set to: {USE_RAMDISK}")
 
+
 app = FastAPI(docs_url="/")  # Set the Swagger UI to root
-engine = create_async_engine(DATABASE_URL, echo=True)
+engine = create_async_engine(DATABASE_URL, echo=False)
 AsyncSessionLocal = sessionmaker(
     bind=engine,
     class_=AsyncSession,
     expire_on_commit=False,
 )
 Base = declarative_base()
+
+
+class DatabaseWriter:
+    def __init__(self, queue):
+        self.queue = queue
+
+    async def dedicated_db_writer(self):
+        while True:
+            write_operations_batch, callback = await self.queue.get()
+            successful_operations = 0
+            ids = []
+            async with AsyncSessionLocal() as session:
+                try:
+                    for write_operation in write_operations_batch:
+                        session.add(write_operation)
+                        successful_operations += 1
+                    await session.flush() # Flush to get the IDs
+                    ids = [obj.id for obj in write_operations_batch]
+                    await session.commit()
+                except SQLAlchemyError as e:
+                    logger.error(f"Database error: {e}")
+                    await session.rollback()
+                except Exception as e:
+                    tb = traceback.format_exc()
+                    logger.error(f"Unexpected error: {e}\n{tb}")
+                    await session.rollback()
+                self.queue.task_done()
+                if callback: # Invoke the callback with the IDs
+                    callback(ids)
+
+    async def enqueue_write(self, write_operations, callback=None):
+        await self.queue.put((write_operations, callback))
 
 def check_that_user_has_required_permissions_to_manage_ramdisks():
     try: # Try to run a harmless command with sudo to test if the user has password-less sudo permissions
@@ -187,7 +224,6 @@ async def build_faiss_indexes():
             logger.info(f"Faiss index built for model {model_name}.")
             faiss_indexes[model_name] = faiss_index  # Store the index by model name
             
-
 class TextEmbedding(Base):
     __tablename__ = "embeddings"
     id = Column(Integer, primary_key=True, index=True)
@@ -220,6 +256,7 @@ class DocumentEmbedding(Base):
     results_json = Column(JSON) # To store the embedding results JSON
     document = relationship("Document", back_populates="document_embeddings")
     embeddings = relationship("TextEmbedding", back_populates="document")
+    __table_args__ = (UniqueConstraint('file_hash', 'model_name', name='_file_hash_model_uc'),)
 
 class Document(Base):
     __tablename__ = "documents"
@@ -232,9 +269,9 @@ class EmbeddingResponse(BaseModel):
 class SimilarityResponse(BaseModel):
     text1: str
     text2: str
+    similarity: float
     embedding1: List[float]
     embedding2: List[float]
-    similarity: float
     
 class SimilarStringResponse(BaseModel):
     results: List[dict]  # List of similar strings and their similarity scores
@@ -267,8 +304,7 @@ async def execute_with_retry(func, *args, **kwargs):
         except OperationalError as e:
             if 'database is locked' in str(e):
                 retries += 1
-                # Implementing exponential backoff with jitter
-                sleep_time = RETRY_DELAY_BASE_SECONDS * (2 ** retries) + (random.random() * JITTER_FACTOR)
+                sleep_time = RETRY_DELAY_BASE_SECONDS * (2 ** retries) + (random.random() * JITTER_FACTOR) # Implementing exponential backoff with jitter
                 logger.warning(f"Database is locked. Retrying ({retries}/{MAX_RETRIES})... Waiting for {sleep_time} seconds")
                 await asyncio.sleep(sleep_time)
             else:
@@ -281,9 +317,8 @@ async def initialize_db():
         await conn.execute(sql_text("PRAGMA journal_mode=WAL;"))
         await conn.execute(sql_text("PRAGMA synchronous = NORMAL;")) # Set synchronous mode to NORMAL (from FULL)
         await conn.execute(sql_text("PRAGMA cache_size = -1048576;")) # Set cache size to 1GB
-        await conn.execute(sql_text("PRAGMA busy_timeout = 5000;")) # Increase the busy timeout to 5 seconds
-        await conn.execute(sql_text("PRAGMA wal_autocheckpoint = 1000;")) # Set automatic checkpoint interval (for example, after every 1000 write transactions)
-        await conn.execute(sql_text("PRAGMA foreign_keys = ON;")) # Enable foreign key constraints (if needed)
+        await conn.execute(sql_text("PRAGMA busy_timeout = 2000;")) # Increase the busy timeout to 2 seconds
+        await conn.execute(sql_text("PRAGMA wal_autocheckpoint = 100;")) # Set automatic checkpoint interval (for example, after every 100 write transactions)
         await conn.run_sync(Base.metadata.create_all) # Create tables if not exists
     logger.info("Database initialization completed.")
 
@@ -353,8 +388,7 @@ async def get_or_compute_embedding(request: EmbeddingRequest, req: Request = Non
     embedding_json = json.dumps(embedding_list) # Serialize the numpy array to JSON and save to the database
     response_time = datetime.utcnow()  # Capture response time as datetime object
     total_time = (response_time - request_time).total_seconds() # Calculate total time using datetime objects
-    # If client_ip is provided, use it; otherwise, try to get from req; if not available, default to "localhost"
-    ip_address = client_ip or (req.client.host if req else "localhost")
+    ip_address = client_ip or (req.client.host if req else "localhost") # If client_ip is provided, use it; otherwise, try to get from req; if not available, default to "localhost"
     await save_embedding_to_db(request.text, request.model_name, embedding_json, ip_address, request_time, response_time, total_time)
     return {"embedding": embedding_list}
 
@@ -366,29 +400,19 @@ async def save_embedding_to_db(text, model_name, embedding_json, ip_address, req
     return await execute_with_retry(_save_embedding_to_db, text, model_name, embedding_json, ip_address, request_time, response_time, total_time)
 
 async def _save_embedding_to_db(text, model_name, embedding_json, ip_address, request_time, response_time, total_time):
-    text_hash = sha3_256(text.encode('utf-8')).hexdigest()
-    async with AsyncSessionLocal() as session: # Check if the embedding already exists by using the hash
-        existing_embedding = await session.execute(select(TextEmbedding).filter(TextEmbedding.text_hash == text_hash, TextEmbedding.model_name == model_name))
-        existing_embedding = existing_embedding.scalar_one_or_none()
-        if existing_embedding:
-            return existing_embedding
-        embedding = TextEmbedding(
-            text=text,
-            model_name=model_name,
-            embedding_json=embedding_json,
-            ip_address=ip_address,
-            request_time=request_time,
-            response_time=response_time,
-            total_time=total_time,
-        )
-        try:
-            session.add(embedding)
-            await session.commit()
-            logger.info(f"Saved embedding for '{text}' using model '{model_name}' to database successfully.")
-        except Exception as e:
-            logger.error(f"Error saving embedding to database: {e}")
-            await session.rollback()
-            raise
+    existing_embedding = await get_embedding_from_db(text, model_name)
+    if existing_embedding:
+        return existing_embedding
+    embedding = TextEmbedding(
+        text=text,
+        model_name=model_name,
+        embedding_json=embedding_json,
+        ip_address=ip_address,
+        request_time=request_time,
+        response_time=response_time,
+        total_time=total_time,
+    )
+    await db_writer.enqueue_write([embedding])  # Enqueue the write operation using the db_writer instance
 
 def load_model(model_name: str, raise_http_exception: bool = True):
     try:
@@ -468,21 +492,23 @@ async def compute_embeddings_for_document(strings, model_name, client_ip):
     return filtered_results
 
 async def store_document_embeddings_in_db(file, file_hash, original_file_content, json_content, results, model_name):
-    results_json_object = json.loads(json_content.decode())
-    async with AsyncSessionLocal() as session:
-        document = Document()
-        session.add(document)
-        await session.flush()
-        document_embedding = DocumentEmbedding(document_id=document.id, filename=file.filename, mimetype=file.content_type, file_hash=file_hash, file_data=original_file_content, results_json=results_json_object)        
-        session.add(document_embedding)
-        await session.flush()
+    document = Document() # Create Document object
+    def handle_document_id(ids): # Define a callback to handle the document ID
+        document_id = ids[0]
+        asyncio.create_task(continue_storing(document_id))
+    await db_writer.enqueue_write([document], callback=handle_document_id)  # Enqueue the write operation for the document
+    async def continue_storing(document_id):  # Now that the document ID is available, we can create the DocumentEmbedding object
+        document_embedding = DocumentEmbedding(document_id=document_id, filename=file.filename, mimetype=file.content_type, file_hash=file_hash, file_data=original_file_content, results_json=json.loads(json_content.decode())) # Create DocumentEmbedding object with document_id
+        await db_writer.enqueue_write([document_embedding]) # Enqueue the write operation for the document embedding
+        write_operations = [] # Collect text embeddings to write
+        logger.info(f"Storing {len(results)} text embeddings in database")
         for text, embedding in results:
             embedding_entry = await _get_embedding_from_db(text, model_name)
             if not embedding_entry:
                 embedding_entry = TextEmbedding(text=text, model_name=model_name, embedding_json=json.dumps(embedding), document_id=document_embedding.id)
-                session.add(embedding_entry)
-        await session.commit()
-        
+                write_operations.append(embedding_entry)
+        await db_writer.enqueue_write(write_operations) # Enqueue the write operation for text embeddings
+
 @app.exception_handler(SQLAlchemyError)
 async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError):
     logger.exception(exc)
@@ -716,17 +742,6 @@ async def compute_similarity_between_strings(request: SimilarityRequest, req: Re
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
-
-@app.post("/get_most_similar_string_from_database/",
-          response_model=SimilarStringResponse,
-          summary="Get Most Similar Strings from Database",
-          description="""Find the most similar strings in the database to the given input text. This endpoint uses a pre-computed FAISS index to quickly search for the closest matching strings.
-          # Additional details and examples here...
-          """,
-          response_description="A JSON object containing the most similar strings and similarity scores.")
-
-
-
 @app.post("/get_most_similar_string_from_database/",
           response_model=SimilarStringResponse,
           summary="Get Most Similar Strings from Database",
@@ -770,6 +785,8 @@ async def get_most_similar_string_from_database(request: SimilarStringRequest, r
     global faiss_indexes, associated_texts_by_model
     model_name = request.model_name
     num_results = request.number_of_most_similar_strings_to_return
+    total_entries = len(associated_texts_by_model[model_name])  # Get the total number of entries for the model
+    num_results = min(num_results, total_entries)  # Ensure num_results doesn't exceed the total number of entries
     logger.info(f"Received request to find {num_results} most similar strings for: {request.text} using model: {model_name}")
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
         raise HTTPException(status_code=403, detail="Unauthorized")
@@ -861,7 +878,8 @@ async def get_all_embeddings_for_document(file: UploadFile = File(...), model_na
                         content += page_content
                         hash_obj.update(page_content.encode())
                     file_hash = hash_obj.hexdigest()
-                    strings = [s.strip() for s in content.replace(". ", ".\n").split('\n') if len(s.strip()) > MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING]
+                    sentences = re.split(r' *[\.\?!][\'"\)\]]* *', content)
+                    strings = [s.strip() for s in sentences if len(s.strip()) > MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING]
                     logger.info(f"Extracted {len(strings)} strings from PDF file")
             elif mime_type.startswith('text/'):
                 logger.info("Processing plain text file")
@@ -904,6 +922,10 @@ async def clear_ramdisk_endpoint(token: str = None):
 
 @app.on_event("startup")
 async def startup_event():
+    global db_writer
+    queue = asyncio.Queue()
+    db_writer = DatabaseWriter(queue)
+    asyncio.create_task(db_writer.dedicated_db_writer())    
     global USE_RAMDISK
     if USE_RAMDISK and not check_that_user_has_required_permissions_to_manage_ramdisks():
         USE_RAMDISK = False
@@ -916,7 +938,8 @@ async def startup_event():
         except FileNotFoundError as e:
             logger.error(e)
     await initialize_db()
-    await build_faiss_indexes() 
-    
+    await build_faiss_indexes()
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=LLAMA_EMBEDDING_SERVER_LISTEN_PORT)
