@@ -1,5 +1,5 @@
 # Use Python 3.9 image
-FROM python:3.9-slim-buster
+FROM python:3.9-buster
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
