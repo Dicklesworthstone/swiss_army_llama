@@ -37,6 +37,6 @@ sudo docker build -t llama-embeddings .
 
 # Run the Docker container
 echo "Running the Docker container..."
-sudo docker run -p 8089:8089 llama-embeddings
+sudo docker run -e TERM=$TERM -p 8089:8089 llama-embeddings
 
 echo "Script completed!"
