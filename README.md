@@ -274,7 +274,7 @@ This endpoint searches the cached embeddings in the database to find the most si
 ### 4. `/get_all_embeddings_for_document/` (POST)
 
 #### Purpose
-Extract text embeddings for a document, supporting both plain text and PDF files (OCR not supported).
+Extract text embeddings for a document, supporting both plain text and PDF files (OCR not supported). Returns a zip file containing the JSON of all the embeddings in your desired layout.
 
 #### Parameters
 - `file`: The uploaded document file (either plain text or PDF).
