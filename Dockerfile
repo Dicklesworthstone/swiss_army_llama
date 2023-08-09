@@ -7,11 +7,13 @@ ENV PYTHONUNBUFFERED=1
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies, including sudo
 RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
-    libmagic1
+    libmagic1 \
+    sudo && \
+    rm -rf /var/lib/apt/lists/*
 
 # Upgrade pip and install wheel
 RUN python3 -m pip install --upgrade pip && \
