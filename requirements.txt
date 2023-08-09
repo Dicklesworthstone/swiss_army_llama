@@ -10,3 +10,4 @@ pandas
 PyPDF2
 python-multipart
 python-magic
+langchain
