@@ -30,7 +30,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sqlalchemy import Column, String, Float, DateTime, Integer, UniqueConstraint, ForeignKey, LargeBinary, select
 from sqlalchemy import text as sql_text
 from sqlalchemy.dialects.sqlite import JSON
-from sqlalchemy.exc import SQLAlchemyError, OperationalError
+from sqlalchemy.exc import SQLAlchemyError, OperationalError, IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, validates
 import faiss
@@ -84,7 +84,7 @@ USE_RAMDISK = config("USE_RAMDISK", default=False, cast=bool)
 RAMDISK_SIZE_IN_GB = config("RAMDISK_SIZE_IN_GB", default=1, cast=int)
 RAMDISK_PATH = "/mnt/ramdisk"
 MAX_RETRIES = config("MAX_RETRIES", default=3, cast=int)
-DB_WRITE_BATCH_SIZE = config("DB_WRITE_BATCH_SIZE", default=100, cast=int) 
+DB_WRITE_BATCH_SIZE = config("DB_WRITE_BATCH_SIZE", default=25, cast=int) 
 RETRY_DELAY_BASE_SECONDS = config("RETRY_DELAY_BASE_SECONDS", default=1, cast=int)
 JITTER_FACTOR = config("JITTER_FACTOR", default=0.1, cast=float)
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
@@ -108,7 +108,6 @@ Base = declarative_base()
 class DatabaseWriter:
     def __init__(self, queue):
         self.queue = queue
-
     async def dedicated_db_writer(self):
         while True:
             write_operations_batch, callback = await self.queue.get()
@@ -122,6 +121,12 @@ class DatabaseWriter:
                     await session.flush() # Flush to get the IDs
                     ids = [obj.id for obj in write_operations_batch]
                     await session.commit()
+                except IntegrityError as e:
+                    if "UNIQUE constraint failed: embeddings.text_hash, embeddings.model_name" in str(e):
+                        logger.warning(f"Embedding already exists in the database: {e}")
+                        await session.rollback()
+                    else:
+                        raise
                 except SQLAlchemyError as e:
                     logger.error(f"Database error: {e}")
                     await session.rollback()
@@ -132,7 +137,6 @@ class DatabaseWriter:
                 self.queue.task_done()
                 if callback: # Invoke the callback with the IDs
                     callback(ids)
-
     async def enqueue_write(self, write_operations, callback=None):
         await self.queue.put((write_operations, callback))
 
@@ -899,16 +903,18 @@ async def get_all_embeddings_for_document(file: UploadFile = File(...), model_na
             with open(temp_file_path, 'rb') as file_buffer: # Store the results in the database
                 original_file_content = file_buffer.read()
             await store_document_embeddings_in_db(file, file_hash, original_file_content, json_content, results, model_name)
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".json") # Create a temporary JSON file
-    temp_file.write(json_content)
-    temp_file.close()
-    zip_file_path = f"/tmp/{file.filename}.zip"  # Create a ZIP file containing the JSON file
+    original_filename_without_extension, _ = os.path.splitext(file.filename) # Determine the original filename without extension
+    json_file_path = f"/tmp/{original_filename_without_extension}.json" # Create a temporary JSON file with the same name as the uploaded file but with a .json extension
+    with open(json_file_path, 'wb') as json_file:
+        json_file.write(json_content)
+    zip_file_path = f"/tmp/{original_filename_without_extension}.zip" # Create a ZIP file containing the JSON file
     with zipfile.ZipFile(zip_file_path, 'w') as zipf:
-        zipf.write(temp_file.name, os.path.basename(temp_file.name))
-    background_tasks.add_task(os.remove, temp_file.name) # Schedule the temp files for deletion after the response is sent
-    background_tasks.add_task(os.remove, temp_file_path) # Return the ZIP file as a download:
-    return FileResponse(zip_file_path, headers={"Content-Disposition": f"attachment; filename={file.filename}.zip"})
-
+        zipf.write(json_file_path, os.path.basename(json_file_path))
+    background_tasks.add_task(os.remove, json_file_path) # Schedule the temp files for deletion after the response is sent
+    background_tasks.add_task(os.remove, temp_file_path) # Return the ZIP file as a download:    
+    return FileResponse(zip_file_path, headers={"Content-Disposition": f"attachment; filename={original_filename_without_extension}.zip"})
+                
+                
 
 @app.post("/clear_ramdisk/")
 async def clear_ramdisk_endpoint(token: str = None):
