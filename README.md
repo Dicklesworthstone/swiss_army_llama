@@ -1,8 +1,8 @@
-# LLama2 Embeddings FastAPI Service
+# Llama2 Embeddings FastAPI Service
 
 ## Introduction
 
-The LLama2 Embedding Server is designed to facilitate and optimize the process of obtaining text embeddings using different LLMs via llama_cpp and langchain. The driving motivation behind this project is to offer a convenient and easy to use API to quickly and easily submit text strings and get back embeddings using Llama2 and similar LLMs. To avoid wasting computation, these embeddings are cached in SQlite and retrieved if they have already been computed before. To speed up the process of loading multiple LLMs, optional RAM Disks can be used, and the process for creating and managing them is handled automatically for you. Finally, some additional useful endpoints are provided, such as computing semantic similarity between submitted text strings, and semantic search across all your cached embeddings using FAISS vector searching. You can also submit a plaintext file or PDF file (not requiring OCR) and get back a zip file containing all of the embeddings for each sentence as JSON, organized in various ways such `records`, `table`, etc. (all the options for the Pandas `to_json()` function).
+The Llama2 Embedding Server is designed to facilitate and optimize the process of obtaining text embeddings using different LLMs via llama_cpp and langchain. To avoid wasting computation, these embeddings are cached in SQlite and retrieved if they have already been computed before. To speed up the process of loading multiple LLMs, optional RAM Disks can be used, and the process for creating and managing them is handled automatically for you. Finally, some additional useful endpoints are provided, such as computing semantic similarity between submitted text strings, and semantic search across all your cached embeddings using FAISS vector searching. You can also submit a plaintext file or PDF file (not requiring OCR) and get back a zip file containing all of the embeddings for each sentence as JSON, organized in various ways such `records`, `table`, etc. (i.e., all the export options from the Pandas `to_json()` function).
 
 ![Llama2 FastAPI Service Swagger UI](https://github.com/Dicklesworthstone/llama_embeddings_fastapi_service/raw/main/Llama2-FastAPI-Service-%20Swagger%20Screenshot.png)
 
@@ -78,13 +78,6 @@ If you'd like to contribute to the project, please submit a pull request.
 This project is licensed under the MIT License.
 
 ---
-
-This section encompasses all the unique points from both lists while ensuring a cohesive and consistent presentation.
-
-## Requirements
-
-- Python 3.9+
-- Libraries: `numpy`, `fastapi`, `uvicorn`, `sqlalchemy`, `faiss`, `psutil`, `sklearn`, `decouple`, `asyncio`, `subprocess`, `traceback`, `glob`, `shutil`, `urllib`, `json`, `logging`, `datetime`
 
 ## Setup and Configuration
 
@@ -195,7 +188,6 @@ During startup, the application performs the following tasks:
 6. **FAISS Index Building**: The application builds the FAISS indexes for efficient similarity search.
 
 Note: If RAM Disk is enabled but the user lacks the required permissions, the application will disable the RAM Disk feature and proceed without it.
-
 
 ## Performance Optimizations
 
