@@ -6,6 +6,17 @@ The Llama2 Embedding Server is designed to facilitate and optimize the process o
 
 ![Llama2 FastAPI Service Swagger UI](https://github.com/Dicklesworthstone/llama_embeddings_fastapi_service/raw/main/Llama2-FastAPI-Service-%20Swagger%20Screenshot.png)
 
+*TLDR:* If you just want to try it very quickly on a fresh Ubuntu 22+ machine (warning, this will install docker using apt):
+
+```bash
+git clone https://github.com/Dicklesworthstone/llama_embeddings_fastapi_service
+cd llama_embeddings_fastapi_service
+chmod +x setup_dockerized_app_on_fresh_machine.sh
+sudo ./setup_dockerized_app_on_fresh_machine.sh
+```
+
+Then open a browser to <your_static_ip_address>:8089 if you're using a VPS or localhost.8089 if you're using your own machine (but you should never run untrusted code with sudo on your own machine! Just get a cheap VPS to experiment with for $30/month).
+
 ---
 
 ## Features
