@@ -15,7 +15,9 @@ chmod +x setup_dockerized_app_on_fresh_machine.sh
 sudo ./setup_dockerized_app_on_fresh_machine.sh
 ```
 
-Then open a browser to <your_static_ip_address>:8089 if you're using a VPS or localhost.8089 if you're using your own machine (but you should never run untrusted code with sudo on your own machine! Just get a cheap VPS to experiment with for $30/month).
+Then open a browser to `<your_static_ip_address>:8089` if you're using a VPS.
+
+Or to `localhost:8089` if you're using your own machine-- but, really, you should never run untrusted code with sudo on your own machine! Just get a cheap VPS to experiment with for $30/month.
 
 ---
 
