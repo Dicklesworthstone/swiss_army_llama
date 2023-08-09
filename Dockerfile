@@ -4,10 +4,6 @@ FROM python:3.9-slim-buster
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 
-# Upgrade pip and install wheel
-RUN python3 -m pip install --upgrade pip && \
-    python3 -m pip install wheel
-
 # Set working directory
 WORKDIR /app
 
@@ -16,6 +12,10 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
     libmagic1
+
+# Upgrade pip and install wheel
+RUN python3 -m pip install --upgrade pip && \
+    python3 -m pip install wheel
 
 # Copy the requirements file and install Python dependencies
 COPY requirements.txt .
