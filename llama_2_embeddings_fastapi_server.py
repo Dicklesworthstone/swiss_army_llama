@@ -1171,6 +1171,7 @@ The response will include the most similar strings found in the database, along 
 ```""",
           response_description="A JSON object containing the query text along with the most similar strings and similarity scores.")
 async def search_stored_embeddings_with_query_string_for_semantic_similarity(request: SemanticSearchRequest, req: Request, token: str = None) -> SemanticSearchResponse:
+    faiss_indexes, token_faiss_indexes, associated_texts_by_model = await build_faiss_indexes()
     request_time = datetime.utcnow()
     global faiss_indexes, associated_texts_by_model
     model_name = request.model_name
