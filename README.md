@@ -26,9 +26,7 @@ Then open a browser to `<your_static_ip_address>:8089` if you're using a VPS.
 
 Or to `localhost:8089` if you're using your own machine-- but, really, you should never run untrusted code with sudo on your own machine! Just get a cheap VPS to experiment with for $30/month.
 
-Watch the the automated setup process in action:
-
-[![asciicast](https://asciinema.org/a/601603.svg)](https://asciinema.org/a/601603)
+Watch the the automated setup process in action [here](https://asciinema.org/a/601603).
 
 ---
 
@@ -48,9 +46,7 @@ Watch the the automated setup process in action:
 12. **Support for Multiple Models and Measures**: Accommodates multiple embedding models and similarity measures, allowing flexibility and customization based on user needs.
 
 ## Demo Screen Recording in Action:
-Here is the live console output while I interact with it from the Swagger page to make requests:
-
-[![asciicast](https://asciinema.org/a/39dZ8vv9nkcNygasUl35wnBPq.svg)](https://asciinema.org/a/39dZ8vv9nkcNygasUl35wnBPq)
+[Here](https://asciinema.org/a/39dZ8vv9nkcNygasUl35wnBPq) is the live console output while I interact with it from the Swagger page to make requests.
 
 ---
 
