@@ -47,7 +47,9 @@ Watch the the automated setup process in action:
 11. **Comprehensive Logging**: Captures essential information with detailed logs, without overwhelming storage or readability.
 12. **Support for Multiple Models and Measures**: Accommodates multiple embedding models and similarity measures, allowing flexibility and customization based on user needs.
 
-## Demo Screen Recording in Action (While I interact with it from the Swagger Page):
+## Demo Screen Recording in Action:
+Here is the live console output while I interact with it from the Swagger page to make requests:
+
 [![asciicast](https://asciinema.org/a/39dZ8vv9nkcNygasUl35wnBPq.svg)](https://asciinema.org/a/39dZ8vv9nkcNygasUl35wnBPq)
 
 ---
