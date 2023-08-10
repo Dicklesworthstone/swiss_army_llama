@@ -145,38 +145,6 @@ The following endpoints are available:
 
 For detailed request and response schemas, please refer to the Swagger UI available at the root URL or the section at the end of this `README`.
 
-## Database Structure
-
-The application uses a SQLite database via SQLAlchemy ORM. Here are the data models used, which can be found in the `embeddings_data_models.py` file:
-
-### TextEmbedding Table
-This table stores individual text embeddings.
-
-- `id`: Primary Key
-- `text`: Text for which the embedding was computed
-- `text_hash`: Hash of the text, computed using SHA3-256
-- `model_name`: Model used to compute the embedding
-- `embedding_json`: The computed embedding in JSON format
-- `ip_address`: Client IP address
-- `request_time`: Timestamp of the request
-- `response_time`: Timestamp of the response
-- `total_time`: Total time taken to process the request
-- `document_id`: Foreign Key referencing the DocumentEmbedding table
-- Unique Constraint on `text_hash` and `model_name`
-
-### DocumentEmbedding Table
-This table stores embeddings for entire documents.
-
-- `id`: Primary Key
-- `document_id`: Foreign Key referencing the Documents table
-- `filename`: Name of the document file
-- `mimetype`: MIME type of the document file
-- `file_hash`: Hash of the file
-- `model_name`: Model used to compute the embedding
-- `file_data`: Binary data of the original file
-- `results_json`: The computed embedding results in JSON format
-- Unique Constraint on `file_hash` and `model_name`
-
 ## Exception Handling
 
 The application has robust exception handling to deal with various types of errors, including database errors and general exceptions. Custom exception handlers are defined for `SQLAlchemyError` and general `Exception`.
