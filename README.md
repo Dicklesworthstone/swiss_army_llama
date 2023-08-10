@@ -133,15 +133,15 @@ The application provides functionalities to set up, clear, and manage RAM Disk. 
 
 The following endpoints are available:
 
-- **GET `/get_list_of_available_model_names/`**: [Retrieve Available Model Names](#). Retrieves the list of available model names for generating embeddings.
-- **GET `/get_all_stored_strings/`**: [Retrieve All Strings](#). Retrieves a list of all stored strings from the database for which embeddings have been computed.
-- **GET `/get_all_stored_documents/`**: [Retrieve All Stored Documents](#). Retrieves a list of all stored documents from the database for which embeddings have been computed.
-- **POST `/get_embedding_vector_for_string/`**: [Retrieve Embedding Vector for a Given Text String](#). Retrieves the embedding vector for a given input text string using the specified model.
-- **POST `/get_token_level_embeddings_matrix_and_combined_feature_vector_for_string/`**: [Retrieve Token-Level Embeddings and Combined Feature Vector for a Given Input String](#). Retrieve the token-level embeddings and combined feature vector for a given input text using the specified model.
-- **POST `/compute_similarity_between_strings/`**: [Compute Similarity Between Two Strings](#). Compute the similarity between two given input strings using specified model embeddings and a selected similarity measure.
-- **POST `/search_stored_embeddings_with_query_string_for_semantic_similarity/`**: [Get Most Similar Strings from Stored Embeddings in Database](#). Find the most similar strings in the database to the given input "query" text.
-- **POST `/get_all_embedding_vectors_for_document/`**: [Get Embeddings for a Document](#). Extract text embeddings for a document, supporting both plain text and PDF files (PDFs requiring OCR are not supported).
-- **POST `/clear_ramdisk/`**: [Clear Ramdisk Endpoint](#). Clears the RAM Disk if it is enabled.
+- **GET `/get_list_of_available_model_names/`**: Retrieve Available Model Names. Retrieves the list of available model names for generating embeddings.
+- **GET `/get_all_stored_strings/`**: Retrieve All Strings. Retrieves a list of all stored strings from the database for which embeddings have been computed.
+- **GET `/get_all_stored_documents/`**: Retrieve All Stored Documents. Retrieves a list of all stored documents from the database for which embeddings have been computed.
+- **POST `/get_embedding_vector_for_string/`**: Retrieve Embedding Vector for a Given Text String. Retrieves the embedding vector for a given input text string using the specified model.
+- **POST `/get_token_level_embeddings_matrix_and_combined_feature_vector_for_string/`**: Retrieve Token-Level Embeddings and Combined Feature Vector for a Given Input String. Retrieve the token-level embeddings and combined feature vector for a given input text using the specified model.
+- **POST `/compute_similarity_between_strings/`**: Compute Similarity Between Two Strings. Compute the similarity between two given input strings using specified model embeddings and a selected similarity measure.
+- **POST `/search_stored_embeddings_with_query_string_for_semantic_similarity/`**: Get Most Similar Strings from Stored Embeddings in Database. Find the most similar strings in the database to the given input "query" text.
+- **POST `/get_all_embedding_vectors_for_document/`**: Get Embeddings for a Document. Extract text embeddings for a document, supporting both plain text and PDF files (PDFs requiring OCR are not supported).
+- **POST `/clear_ramdisk/`**: Clear Ramdisk Endpoint. Clears the RAM Disk if it is enabled.
 
 For detailed request and response schemas, please refer to the Swagger UI available at the root URL or the section at the end of this `README`.
 
