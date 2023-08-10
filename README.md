@@ -10,7 +10,7 @@ You can also submit a plaintext file or PDF file (not requiring OCR) and get bac
 
 In addition to fixed-sized embedding vectors, we also expose functionality that allows you to get back token-level embeddings, where each token in the input stream is embedded with its context in the string as a full sized vector, thus producing a matrix that has a number of rows equal to the number of tokens in the input string. This includes far more nuanced information about the contents of the string at the expense of much greater compute and storage requirements. The other drawback is that, instead of having the same sized output for every string, regardless of length (which makes it very easy to compare unequal length strings using cosine similarity and other measures), the token-level embedding matrix obviously differs in dimensions for two different strings if the strings have different numbers of tokens. To deal with this, we introduce combined feature vectors, which compute the column-wise mean, min, max, and std. deviation of the token-level emeddding matrix, and concatenate these together in to a single huge matrix; this allows you to compare strings of different lengths while still capture more nuance. The combined results, including the embedding matrix and associated combined feature vector, can similarly be returned as either a zip file or direct JSON response.
 
-
+## Screenshot
 ![Llama2 FastAPI Service Swagger UI](https://github.com/Dicklesworthstone/llama_embeddings_fastapi_service/raw/main/Llama2-FastAPI-Service-%20Swagger%20Screenshot.png)
 
 *TLDR:* If you just want to try it very quickly on a fresh Ubuntu 22+ machine (warning, this will install docker using apt):
