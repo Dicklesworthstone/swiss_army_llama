@@ -280,8 +280,6 @@ This section highlights the major performance enhancements integrated into the p
 - **Benefit**: Once embeddings are computed for a particular text, they are stored in the database, eliminating the need for re-computation during subsequent requests.
 - **Implementation**: When a request is made to compute an embedding, the system first checks the database. If the embedding for the given text is found, it is returned immediately, ensuring faster response times.
 
-Certainly! Here's a more comprehensive `README.md` section for using the Dockerized version of the Llama2 Embeddings API Service app:
-
 ---
 
 ### Dockerized Llama2 Embeddings API Service App
