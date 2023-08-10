@@ -1332,7 +1332,7 @@ async def clear_ramdisk_endpoint(token: str = None):
 
 @app.on_event("startup")
 async def startup_event():
-    global db_writer
+    global db_writer, faiss_indexes, token_faiss_indexes, associated_texts_by_model
     await initialize_db()
     queue = asyncio.Queue()
     db_writer = DatabaseWriter(queue)
