@@ -105,6 +105,9 @@ You can configure the service easily by editing the included `.env` file. Here's
 - `RAMDISK_PATH`: Path to the RAM disk. (e.g., `"/mnt/ramdisk"`)
 - `RAMDISK_SIZE_IN_GB`: RAM disk size in GB. (e.g., `40`)
 
+## Demo Screen Recording in Action (While I interact with it from the Swagger Page):
+
+[![asciicast](https://asciinema.org/a/39dZ8vv9nkcNygasUl35wnBPq.svg)](https://asciinema.org/a/39dZ8vv9nkcNygasUl35wnBPq)
 
 ## Contributing
 
