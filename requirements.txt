@@ -14,3 +14,6 @@ langchain
 scikit-learn
 llama-cpp-python
 httpx
+numba
+scipy
+hyppo
