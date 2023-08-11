@@ -29,7 +29,7 @@ from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Depends
 from fastapi.responses import JSONResponse, FileResponse, Response
 from langchain.embeddings import LlamaCppEmbeddings
 from sklearn.metrics.pairwise import cosine_similarity
-from sqlalchemy import select, inspect
+from sqlalchemy import select
 from sqlalchemy import text as sql_text
 from sqlalchemy.exc import SQLAlchemyError, OperationalError, IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
@@ -71,6 +71,7 @@ sh.setFormatter(formatter)
 logger.addHandler(sh)
 logger = logging.getLogger(__name__)
 logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
+configured_logger = logger
 
 # Global variables
 use_hardcoded_security_token = 0
