@@ -1143,7 +1143,7 @@ def update_summary_table(new_row):
 
 async def get_sentiment_score_from_llm(focus_key, sentiment_adjective, sentiment_explanation, target_audience, scoring_scale_explanation, source_text, model_name):
     start_time = datetime.utcnow()
-    summary_table = pd.DataFrame(columns=['Attempt', 'Successful Runs', 'Failed Runs', 'Time Taken in Seconds', 'Mean Score', '95% CI Lower', '95% CI Upper', 'IQR Lower', 'IQR Upper', 'IQR as Pct of Mean'])
+    summary_table = pd.DataFrame(columns=SUMMARY_COLUMNS)
     populated_prompt_text = generate_llm_sentiment_score_prompt(sentiment_adjective, sentiment_explanation, target_audience, scoring_scale_explanation)
     combined_prompt_text = combine_populated_prompts_with_source_text(populated_prompt_text, source_text)
     backoff_time = 1
@@ -1251,15 +1251,16 @@ MAX_ATTEMPTS = 12 # How many times to attempt to generate a valid output before 
 PARALLEL_ATTEMPTS = 3 # How many parallel attempts to make per iteration
 MIN_SUCCESSFUL_RUNS_TO_GENERATE_SENTIMENT_SCORE = 5 # How many successful runs are required to consider the output valid
 USE_RAMDISK = False
-SUMMARY_TABLE_PATH = 'combined_summary_table.csv'
 LLM_CONTEXT_SIZE_IN_TOKENS = 1024
+SUMMARY_TABLE_PATH = 'combined_summary_table.csv'
+SUMMARY_COLUMNS = ['Attempt', 'Successful Runs', 'Failed Runs', 'Mean Score', '95% CI Lower', '95% CI Upper', 'IQR Lower', 'IQR Upper', 'IQR as Pct of Mean']
 neutral_score = lowest_possible_score + (highest_possible_score - lowest_possible_score) / 2
 scoring_scale_explanation = f"on a scale from {lowest_possible_score} (strongly does NOT exhibit the adjective) to +{highest_possible_score} (strongly exhibits the adjective)-- so that {neutral_score} implies that nothing can be determined about the extent to which the adjective is reflected-- based on the contents of a sentence/paragraph/utterance."
 logger.info(f"Scoring scale explanation: {scoring_scale_explanation}")
 # Initialize the summary table
-summary_columns = ['Focus Area', 'Sentiment Adjective', 'Prompt', 'Attempt', 'Successful Runs', 'Failed Runs', 'Mean Score', '95% CI Lower', '95% CI Upper']
-initial_summary_table = pd.DataFrame(columns=summary_columns)
+initial_summary_table = pd.DataFrame(columns=SUMMARY_COLUMNS)
 initial_summary_table.to_csv(SUMMARY_TABLE_PATH, index=False)
+
 
 combined_sentiment_analysis_dict = asyncio.run(analyze_focus_area_sentiments(focus_key, scoring_scale_explanation, source_text, model_name))  # noqa: E501
 with open('combined_sentiment_analysis.json', 'w') as file:
