@@ -9,8 +9,10 @@ import re
 import json
 import numpy as np
 import pandas as pd
+from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
+
 
 financial_investor_focus_presets = """
     Optimistic: Reflecting a positive outlook or confidence in future success.
@@ -33,7 +35,7 @@ financial_investor_focus_presets = """
     Indifferent: Showing lack of interest, concern, or importance.
     Receptive: Indicating willingness to consider new ideas or feedback.
     Defensive: Reflecting a protective stance, often in response to criticism or challenges.
-"""
+"""  # noqa: E501
 
 public_company_earnings_call_text = """
     Optimistic: Expressing confidence in future growth, profitability, or success.
@@ -1049,7 +1051,7 @@ def validate_llm_generated_sentiment_response(llm_raw_output, lowest_possible_sc
         logger.info(f"Removed extra decimal points and negative signs from sentiment_score_str: {sentiment_score_str}")
     try: # Attempt to cast sentiment_score into a float
         if use_verbose:
-            logger.info(f"Attempting to cast sentiment_score_str into a float...")
+            logger.info(f"Attempting to cast sentiment_score_str {sentiment_score_str} into a float...")
         sentiment_score = float(sentiment_score_str)
         if sentiment_score < lowest_possible_score: # If out of range, bound to the nearest limit
             logger.warning(f"Sentiment score {sentiment_score} is below the lower bound {lowest_possible_score}.")
@@ -1101,7 +1103,8 @@ def combine_llm_generated_sentiment_responses(llm_raw_outputs, lowest_possible_s
 
 async def get_sentiment_score_from_llm(focus_key, sentiment_adjective, sentiment_explanation, target_audience, scoring_scale_explanation, source_text, model_name):
     global combined_summary_table
-    summary_table = pd.DataFrame(columns=['Attempt', 'Successful Runs', 'Failed Runs', 'Mean Score', '95% CI Lower', '95% CI Upper', 'IQR Lower', 'IQR Upper', 'IQR as Pct of Mean'])
+    start_time = datetime.utcnow()
+    summary_table = pd.DataFrame(columns=['Attempt', 'Successful Runs', 'Failed Runs', 'Time Taken in Seconds', 'Mean Score', '95% CI Lower', '95% CI Upper', 'IQR Lower', 'IQR Upper', 'IQR as Pct of Mean'])
     populated_prompt_text = generate_llm_sentiment_score_prompt(sentiment_adjective, sentiment_explanation, target_audience, scoring_scale_explanation)
     combined_prompt_text = combine_populated_prompts_with_source_text(populated_prompt_text, source_text)
     backoff_time = 1
@@ -1116,6 +1119,7 @@ async def get_sentiment_score_from_llm(focus_key, sentiment_adjective, sentiment
         for llm_raw_output in raw_outputs:
             try:
                 validate_llm_generated_sentiment_response(llm_raw_output, lowest_possible_score, highest_possible_score)
+                print()
                 successful_runs += 1
             except ValueError:
                 failed_runs += 1
@@ -1126,7 +1130,9 @@ async def get_sentiment_score_from_llm(focus_key, sentiment_adjective, sentiment
                 logger.info(f"Output validation successful! Mean Sentiment Score: {mean_sentiment_score} | Confidence Interval: {sentiment_score_95_pct_confidence_interval}")
                 logger.info(f"Interquartile Range of Sentiment Scores: {interquartile_range_of_sentiment_scores} | IQR as Percentage of Mean Score: {iqr_of_sentiment_score_as_pct_of_mean_score * 100}%")
                 summary_table.loc[len(summary_table)] = [attempt + 1, successful_runs, failed_runs, mean_sentiment_score, *sentiment_score_95_pct_confidence_interval, *interquartile_range_of_sentiment_scores, iqr_of_sentiment_score_as_pct_of_mean_score]
-                combined_summary_table.loc[len(combined_summary_table)] = [focus_key, sentiment_adjective, combined_prompt_text, attempt + 1, successful_runs, failed_runs, mean_sentiment_score, *sentiment_score_95_pct_confidence_interval, *interquartile_range_of_sentiment_scores, iqr_of_sentiment_score_as_pct_of_mean_score]
+                finish_time = datetime.utcnow()
+                time_taken_in_seconds = (finish_time - start_time).total_seconds()
+                combined_summary_table.loc[len(combined_summary_table)] = [focus_key, sentiment_adjective, combined_prompt_text, attempt + 1, successful_runs, failed_runs, time_taken_in_seconds, mean_sentiment_score, *sentiment_score_95_pct_confidence_interval, *interquartile_range_of_sentiment_scores, iqr_of_sentiment_score_as_pct_of_mean_score]
                 combined_summary_table.to_csv('combined_summary_table.csv', index=False)
                 return mean_sentiment_score, sentiment_score_95_pct_confidence_interval, interquartile_range_of_sentiment_scores, iqr_of_sentiment_score_as_pct_of_mean_score, score_justification_strings, summary_table
             except ValueError:
@@ -1142,6 +1148,7 @@ async def get_sentiment_score_from_llm(focus_key, sentiment_adjective, sentiment
 
 
 async def analyze_focus_area_sentiments(focus_key, scoring_scale_explanation, source_text, model_name):
+    analysis_start_time = datetime.utcnow()
     populated_prompts_dict = generate_all_prompts(focus_key, scoring_scale_explanation)
     target_audience = focus_areas_dict[focus_key]
     combined_sentiment_analysis_dict = {
@@ -1169,9 +1176,12 @@ async def analyze_focus_area_sentiments(focus_key, scoring_scale_explanation, so
                             "run_summary_table": summary_table.to_dict(orient="records")
             }
         }
+    analysis_finish_time = datetime.utcnow()
+    analysis_time_taken_in_seconds = (analysis_finish_time - analysis_start_time).total_seconds()
+    logger.info(f"Analysis of {focus_key} took {analysis_time_taken_in_seconds} seconds.")
     return combined_sentiment_analysis_dict
 
-def calculate_max_workers(model_memory_requirement, safety_factor=0.6):
+def calculate_max_workers(model_memory_requirement, safety_factor=0.5):
     available_memory = psutil.virtual_memory().available / (1024 ** 2) # Convert to MB
     max_workers = int((available_memory * safety_factor) / model_memory_requirement)
     return max_workers
@@ -1198,16 +1208,16 @@ model_memory_requirement = get_model_memory_requirement(model_name)
 print(f"Model memory requirement: {model_memory_requirement} MB")
 MAX_WORKERS = calculate_max_workers(model_memory_requirement)
 print(f"MAX_WORKERS: {MAX_WORKERS}")
-MAX_ATTEMPTS = 50 # How many times to attempt to generate a valid output before giving up
-PARALLEL_ATTEMPTS = 10 # How many parallel attempts to make per iteration
-MIN_SUCCESSFUL_RUNS_TO_GENERATE_SENTIMENT_SCORE = 6 # How many successful runs are required to consider the output valid
+MAX_ATTEMPTS = 20 # How many times to attempt to generate a valid output before giving up
+PARALLEL_ATTEMPTS = 4 # How many parallel attempts to make per iteration
+MIN_SUCCESSFUL_RUNS_TO_GENERATE_SENTIMENT_SCORE = 8 # How many successful runs are required to consider the output valid
 neutral_score = lowest_possible_score + (highest_possible_score - lowest_possible_score) / 2
 scoring_scale_explanation = f"on a scale from {lowest_possible_score} (strongly does NOT exhibit the adjective) to +{highest_possible_score} (strongly exhibits the adjective)-- so that {neutral_score} implies that nothing can be determined about the extent to which the adjective is reflected-- based on the contents of a sentence/paragraph/utterance."
 logger.info(f"Scoring scale explanation: {scoring_scale_explanation}")
 # Define global variable combined_summary_table:
 combined_summary_table = pd.DataFrame(columns=['Focus Area', 'Sentiment Adjective', 'Prompt', 'Attempt', 'Successful Runs', 'Failed Runs', 'Mean Score', '95% CI Lower', '95% CI Upper'])
 
-combined_sentiment_analysis_dict = asyncio.run(analyze_focus_area_sentiments(focus_key, scoring_scale_explanation, source_text, model_name))
+combined_sentiment_analysis_dict = asyncio.run(analyze_focus_area_sentiments(focus_key, scoring_scale_explanation, source_text, model_name))  # noqa: E501
 with open('combined_sentiment_analysis.json', 'w') as file:
     json.dump(combined_sentiment_analysis_dict, file, indent=4)
 print(combined_sentiment_analysis_dict)
