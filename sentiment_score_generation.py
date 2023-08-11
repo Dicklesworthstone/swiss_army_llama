@@ -39,7 +39,7 @@ financial_investor_focus_presets = """
     Indifferent: Showing lack of interest, concern, or importance.
     Receptive: Indicating willingness to consider new ideas or feedback.
     Defensive: Reflecting a protective stance, often in response to criticism or challenges.
-"""  # noqa: E501
+"""  
 
 public_company_earnings_call_text = """
     Optimistic: Expressing confidence in future growth, profitability, or success.
@@ -1134,12 +1134,21 @@ def combine_llm_generated_sentiment_responses(llm_raw_outputs, lowest_possible_s
     iqr_of_sentiment_score_as_pct_of_mean_score = (interquartile_range_of_sentiment_scores[1] - interquartile_range_of_sentiment_scores[0]) / mean_sentiment_score
     return mean_sentiment_score, sentiment_score_95_pct_confidence_interval, interquartile_range_of_sentiment_scores, iqr_of_sentiment_score_as_pct_of_mean_score, score_justification_strings
 
-def update_summary_table(new_row):
-    lock = FileLock(SUMMARY_TABLE_PATH + ".lock")
-    with lock:
-        summary_table = pd.read_csv(SUMMARY_TABLE_PATH) # Read the existing summary table
-        summary_table.loc[len(summary_table)] = new_row # Add the new row
-        summary_table.to_csv(SUMMARY_TABLE_PATH, index=False) # Write back to the file
+def update_summary_table(update_dict, global_table=False):
+    table_path = GLOBAL_SUMMARY_TABLE_PATH if global_table else SUMMARY_TABLE_PATH
+    try:
+        lock = FileLock(table_path + ".lock")
+        with lock:
+            if os.path.exists(table_path):
+                summary_table = pd.read_csv(table_path)
+            else:
+                columns = GLOBAL_SUMMARY_COLUMNS if global_table else SUMMARY_COLUMNS
+                summary_table = pd.DataFrame(columns=columns)
+            summary_table = summary_table.append(update_dict, ignore_index=True)
+            summary_table.to_csv(table_path, index=False)
+            logger.info(f"{'Global' if global_table else ''} Summary table updated successfully.")
+    except Exception as e:
+        logger.error(f"An error occurred while updating the {'global' if global_table else ''} summary table: {e}", exc_info=True)
 
 async def get_sentiment_score_from_llm(focus_key, sentiment_adjective, sentiment_explanation, target_audience, scoring_scale_explanation, source_text, model_name):
     start_time = datetime.utcnow()
@@ -1165,21 +1174,42 @@ async def get_sentiment_score_from_llm(focus_key, sentiment_adjective, sentiment
         logger.info(f"Attempt {attempt + 1}: {successful_runs} successful runs, {failed_runs} failed runs.")
         if successful_runs >= MIN_SUCCESSFUL_RUNS_TO_GENERATE_SENTIMENT_SCORE: # Check if enough valid results have been gathered
             try:
+                
                 mean_sentiment_score, sentiment_score_95_pct_confidence_interval, interquartile_range_of_sentiment_scores, iqr_of_sentiment_score_as_pct_of_mean_score, score_justification_strings = combine_llm_generated_sentiment_responses(raw_outputs, lowest_possible_score, highest_possible_score)
                 logger.info(f"Output validation successful! Mean Sentiment Score: {mean_sentiment_score} | Confidence Interval: {sentiment_score_95_pct_confidence_interval}")
                 logger.info(f"Interquartile Range of Sentiment Scores: {interquartile_range_of_sentiment_scores} | IQR as Percentage of Mean Score: {iqr_of_sentiment_score_as_pct_of_mean_score * 100}%")
-                summary_table.loc[len(summary_table)] = [attempt + 1, successful_runs, failed_runs, mean_sentiment_score, *sentiment_score_95_pct_confidence_interval, *interquartile_range_of_sentiment_scores, iqr_of_sentiment_score_as_pct_of_mean_score]
                 finish_time = datetime.utcnow()
                 time_taken_in_seconds = (finish_time - start_time).total_seconds()
-                new_row = [focus_key, sentiment_adjective, combined_prompt_text, attempt + 1, successful_runs, failed_runs, time_taken_in_seconds, mean_sentiment_score, *sentiment_score_95_pct_confidence_interval, *interquartile_range_of_sentiment_scores, iqr_of_sentiment_score_as_pct_of_mean_score]
-                update_summary_table(new_row)
-                return mean_sentiment_score, sentiment_score_95_pct_confidence_interval, interquartile_range_of_sentiment_scores, iqr_of_sentiment_score_as_pct_of_mean_score, score_justification_strings, summary_table
+                update_dict = { 'Attempt': attempt + 1,
+                                'Successful Runs': successful_runs,
+                                'Failed Runs': failed_runs,
+                                'Time Taken in Seconds': time_taken_in_seconds,
+                                'Mean Score': mean_sentiment_score,
+                                '95% CI Lower': sentiment_score_95_pct_confidence_interval[0],
+                                '95% CI Upper': sentiment_score_95_pct_confidence_interval[1],
+                                'IQR Lower': interquartile_range_of_sentiment_scores[0],
+                                'IQR Upper': interquartile_range_of_sentiment_scores[1],
+                                'IQR as Pct of Mean': iqr_of_sentiment_score_as_pct_of_mean_score}
+                update_summary_table(update_dict, global_table=False)
+                return mean_sentiment_score, sentiment_score_95_pct_confidence_interval, interquartile_range_of_sentiment_scores, iqr_of_sentiment_score_as_pct_of_mean_score, score_justification_strings, summary_table, combined_prompt_text, attempt, successful_runs, failed_runs, time_taken_in_seconds
             except ValueError:
                 logger.error(f"Attempt {attempt + 1} failed to combine outputs despite having enough successful runs. Trying again.")
-                summary_table.loc[len(summary_table)] = [attempt + 1, successful_runs, failed_runs, None, None, None, None, None, None]
+                finish_time = datetime.utcnow()
+                time_taken_in_seconds = (finish_time - start_time).total_seconds()                
+                update_dict = { 'Attempt': attempt + 1,
+                                'Successful Runs': successful_runs,
+                                'Failed Runs': failed_runs,
+                                'Time Taken in Seconds': time_taken_in_seconds}
+                update_summary_table(update_dict, global_table=False)
         else:
             logger.warning(f"Not enough successful runs in attempt {attempt + 1}. Trying again.")
-            summary_table.loc[len(summary_table)] = [attempt + 1, successful_runs, failed_runs, None, None, None, None, None, None]
+            finish_time = datetime.utcnow()
+            time_taken_in_seconds = (finish_time - start_time).total_seconds()                 
+            update_dict = { 'Attempt': attempt + 1,
+                            'Successful Runs': successful_runs,
+                            'Failed Runs': failed_runs,
+                            'Time Taken in Seconds': time_taken_in_seconds}
+            update_summary_table(update_dict, global_table=False)
         await asyncio.sleep(backoff_time) # Async sleep
         backoff_time *= 2 # Double the backoff time for the next iteration
     logger.error("Maximum attempts reached without valid output. Please review the LLM's responses.")
@@ -1201,7 +1231,23 @@ async def analyze_focus_area_sentiments(focus_key, scoring_scale_explanation, so
     }
     for sentiment_adjective, populated_prompt_text in populated_prompts_dict.items():
         sentiment_explanation = populated_prompt_text.split("<sentiment_explanation>:  ")[1].split("\n")[0]
-        mean_sentiment_score, sentiment_score_95_pct_confidence_interval, interquartile_range_of_sentiment_scores, iqr_of_sentiment_score_as_pct_of_mean_score, score_justification_strings, summary_table = await get_sentiment_score_from_llm(focus_key, sentiment_adjective, sentiment_explanation, target_audience, scoring_scale_explanation, source_text, model_name)
+        mean_sentiment_score, sentiment_score_95_pct_confidence_interval, interquartile_range_of_sentiment_scores, iqr_of_sentiment_score_as_pct_of_mean_score, score_justification_strings, summary_table, combined_prompt_text, attempt, successful_runs, failed_runs, time_taken_in_seconds = await get_sentiment_score_from_llm(focus_key, sentiment_adjective, sentiment_explanation, target_audience, scoring_scale_explanation, source_text, model_name)
+        update_dict = {
+            'Focus Area': focus_key,
+            'Sentiment Adjective': sentiment_adjective,
+            'Prompt': combined_prompt_text,
+            'Attempt': attempt + 1,
+            'Successful Runs': successful_runs,
+            'Failed Runs': failed_runs,
+            'Time Taken in Seconds': time_taken_in_seconds,
+            'Mean Score': mean_sentiment_score,
+            '95% CI Lower': sentiment_score_95_pct_confidence_interval[0],
+            '95% CI Upper': sentiment_score_95_pct_confidence_interval[1],
+            'IQR Lower': interquartile_range_of_sentiment_scores[0],
+            'IQR Upper': interquartile_range_of_sentiment_scores[1],
+            'IQR as Pct of Mean': iqr_of_sentiment_score_as_pct_of_mean_score
+        }
+        update_summary_table(update_dict, global_table=True)
         combined_sentiment_analysis_dict["individual_sentiment_report_dict"][sentiment_adjective] = {
             "sentiment_adjective": sentiment_adjective,
             "sentiment_explanation": sentiment_explanation,
@@ -1239,9 +1285,8 @@ def get_model_memory_requirement(model_name):
 lowest_possible_score = -100.0
 highest_possible_score = 100.0
 model_name = "wizardlm-1.0-uncensored-llama2-13b"
-source_text = "The food was delicious but the service was slow." # Example source text
-focus_key = "restaurant_review_focus"
-
+source_text = "The food was delicious but the service was slow. Overall I would try it again but not on a busy night." # Example source text
+focus_key = "restaurant_review_focus" # The bundle of sentiment adjectives to use to analyze the source text
 
 model_memory_requirement = get_model_memory_requirement(model_name)
 print(f"Model memory requirement: {model_memory_requirement} MB")
@@ -1253,16 +1298,18 @@ MIN_SUCCESSFUL_RUNS_TO_GENERATE_SENTIMENT_SCORE = 5 # How many successful runs a
 USE_RAMDISK = False
 LLM_CONTEXT_SIZE_IN_TOKENS = 1024
 SUMMARY_TABLE_PATH = 'combined_summary_table.csv'
-SUMMARY_COLUMNS = ['Attempt', 'Successful Runs', 'Failed Runs', 'Mean Score', '95% CI Lower', '95% CI Upper', 'IQR Lower', 'IQR Upper', 'IQR as Pct of Mean']
+GLOBAL_SUMMARY_TABLE_PATH = 'global_combined_summary_table.csv'
+SUMMARY_COLUMNS = ['Attempt', 'Successful Runs', 'Failed Runs', 'Time Taken in Seconds', 'Mean Score', '95% CI Lower', '95% CI Upper', 'IQR Lower', 'IQR Upper', 'IQR as Pct of Mean']
+GLOBAL_SUMMARY_COLUMNS = ['Focus Area', 'Sentiment Adjective', 'Prompt'] + SUMMARY_COLUMNS
+
 neutral_score = lowest_possible_score + (highest_possible_score - lowest_possible_score) / 2
 scoring_scale_explanation = f"on a scale from {lowest_possible_score} (strongly does NOT exhibit the adjective) to +{highest_possible_score} (strongly exhibits the adjective)-- so that {neutral_score} implies that nothing can be determined about the extent to which the adjective is reflected-- based on the contents of a sentence/paragraph/utterance."
 logger.info(f"Scoring scale explanation: {scoring_scale_explanation}")
-# Initialize the summary table
-initial_summary_table = pd.DataFrame(columns=SUMMARY_COLUMNS)
-initial_summary_table.to_csv(SUMMARY_TABLE_PATH, index=False)
+if not os.path.exists(GLOBAL_SUMMARY_TABLE_PATH):
+    initial_global_summary_table = pd.DataFrame(columns=GLOBAL_SUMMARY_COLUMNS)
+    initial_global_summary_table.to_csv(GLOBAL_SUMMARY_TABLE_PATH, index=False)
 
-
-combined_sentiment_analysis_dict = asyncio.run(analyze_focus_area_sentiments(focus_key, scoring_scale_explanation, source_text, model_name))  # noqa: E501
+combined_sentiment_analysis_dict = asyncio.run(analyze_focus_area_sentiments(focus_key, scoring_scale_explanation, source_text, model_name))  
 with open('combined_sentiment_analysis.json', 'w') as file:
     json.dump(combined_sentiment_analysis_dict, file, indent=4)
 print(combined_sentiment_analysis_dict)
