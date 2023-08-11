@@ -1,6 +1,10 @@
 from llama_2_embeddings_fastapi_server import load_token_level_embedding_model
 from llama_2_embeddings_fastapi_server import configured_logger as logger
 import asyncio
+import psutil
+import glob
+import os
+import sys
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 
@@ -969,7 +973,7 @@ def generate_llm_sentiment_score_prompt(sentiment_adjective, sentiment_explanati
         f"<sentiment_adjective>:  {sentiment_adjective}\n"
         f"<sentiment_explanation>:  {sentiment_explanation}\n\n"
         f"Please provide your analysis in the following format:\n"
-        f"`sentiment_score`_|_`score_justification`\n"
+        f"`sentiment_score` | `score_justification`\n"
         f"where `sentiment_score` is the score on the aforementioned scale, and `score_justification` is a textual description of what exactly made you come up with the score that you did."
     )
     return populated_prompt_text
@@ -979,54 +983,103 @@ def combine_populated_prompts_with_source_text(populated_prompt, source_text):
     return combined_prompt
 
 def validate_llm_generated_sentiment_response(llm_raw_output, low_score, high_score):
+    use_verbose = 1
+    if use_verbose:
+        logger.info(f"Validating LLM raw output: {llm_raw_output}")
     llm_raw_output = llm_raw_output.strip().strip("`") # Remove surrounding whitespace and backticks if present
     llm_raw_output = llm_raw_output.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">") # Replace any HTML-encoded characters
-    parts = llm_raw_output.split("_|_") # If multiple delimiters are found, take the first part as sentiment_score and the rest as justification
+    parts = llm_raw_output.split("|") # If multiple delimiters are found, take the first part as sentiment_score and the rest as justification
+    if use_verbose:
+        logger.info(f"Split LLM raw output into parts: {parts}")
     if len(parts) < 2:
-        raise ValueError("The delimiter '_|_' must be present at least once in the LLM raw output.")
-    sentiment_score_str, score_justification = parts[0], "_|_".join(parts[1:])
+        raise ValueError("The delimiter '|' must be present at least once in the LLM raw output.")
+    sentiment_score_str, score_justification = parts[0], "|".join(parts[1:])
+    if use_verbose:
+        logger.info(f"Extracted sentiment_score_str: {sentiment_score_str}")
+        logger.info(f"Extracted score_justification: {score_justification}")
     sentiment_score_str = sentiment_score_str.strip() # Trim any leading or trailing whitespace from both parts
     score_justification = score_justification.strip()
+    if use_verbose:
+        logger.info(f"Trimmed sentiment_score_str: {sentiment_score_str}")
     sentiment_score_str = "".join(char for char in sentiment_score_str if char in "0123456789.-") # Remove any non-numeric characters except the decimal point and negative sign from sentiment_score_str
+    if use_verbose:
+        logger.info(f"Removed non-numeric characters from sentiment_score_str: {sentiment_score_str}")
     if sentiment_score_str.count(".") > 1: # If multiple decimal points or negative signs are present, keep only the first occurrence
         sentiment_score_str = sentiment_score_str.replace(".", "", sentiment_score_str.count(".") - 1)
     if sentiment_score_str.count("-") > 1:
         sentiment_score_str = sentiment_score_str.replace("-", "", sentiment_score_str.count("-") - 1)
+    if use_verbose:
+        logger.info(f"Removed extra decimal points and negative signs from sentiment_score_str: {sentiment_score_str}")
     try: # Attempt to cast sentiment_score into a float
+        if use_verbose:
+            logger.info(f"Attempting to cast sentiment_score_str into a float...")
         sentiment_score = float(sentiment_score_str)
         if sentiment_score < low_score: # If out of range, bound to the nearest limit
+            logger.warning(f"Sentiment score {sentiment_score} is below the lower bound {low_score}.")
             sentiment_score = low_score
         elif sentiment_score > high_score:
+            logger.warning(f"Sentiment score {sentiment_score} is above the upper bound {high_score}.")
             sentiment_score = high_score
     except ValueError:
+        logger.error(f"Sentiment score {sentiment_score_str} could not be cast into a float after attempted corrections.")
         raise ValueError("Sentiment score could not be cast into a float after attempted corrections.")
-    if len(score_justification) < 40 or len(score_justification.split()) < 10: # If score justification is too short, return a warning in the justification itself
+    if len(score_justification) < 30 or len(score_justification.split()) < 5: # If score justification is too short, return a warning in the justification itself
+        logger.warning(f"Justification is too short: {score_justification}")
         score_justification = f"Warning: Justification is too short. Original response: {score_justification}"
     return sentiment_score, score_justification
 
+class suppress_stdout_stderr(object):
+    def __enter__(self):
+        self.outnull_file = open(os.devnull, 'w')
+        self.errnull_file = open(os.devnull, 'w')
+        self.old_stdout_fileno_undup    = sys.stdout.fileno()
+        self.old_stderr_fileno_undup    = sys.stderr.fileno()
+        self.old_stdout_fileno = os.dup ( sys.stdout.fileno() )
+        self.old_stderr_fileno = os.dup ( sys.stderr.fileno() )
+        self.old_stdout = sys.stdout
+        self.old_stderr = sys.stderr
+        os.dup2 ( self.outnull_file.fileno(), self.old_stdout_fileno_undup )
+        os.dup2 ( self.errnull_file.fileno(), self.old_stderr_fileno_undup )
+        sys.stdout = self.outnull_file
+        sys.stderr = self.errnull_file
+        return self
+    def __exit__(self, *_):        
+        sys.stdout = self.old_stdout
+        sys.stderr = self.old_stderr
+        os.dup2 ( self.old_stdout_fileno, self.old_stdout_fileno_undup )
+        os.dup2 ( self.old_stderr_fileno, self.old_stderr_fileno_undup )
+        os.close ( self.old_stdout_fileno )
+        os.close ( self.old_stderr_fileno )
+        self.outnull_file.close()
+        self.errnull_file.close()
+
 def run_llm_in_process(combined_prompt_text, model_name):
-    llm_local = load_token_level_embedding_model(model_name)
+    with suppress_stdout_stderr():
+        llm_local = load_token_level_embedding_model(model_name)
     return llm_local(combined_prompt_text)
 
 async def parallel_attempt(combined_prompt_text, model_name):
     global low_score, high_score
     loop = asyncio.get_event_loop()
-    with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:  # Set max_workers here
-        result = await loop.run_in_executor(executor, partial(run_llm_in_process, combined_prompt_text, model_name))
-        sentiment_score, score_justification = validate_llm_generated_sentiment_response(result, low_score, high_score)
-        return sentiment_score, score_justification
+    with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        result_dict = await loop.run_in_executor(executor, partial(run_llm_in_process, combined_prompt_text, model_name))
+        result_text = result_dict['choices'][0]['text']  # Extract the text from the dictionary
+        try:
+            sentiment_score, score_justification = validate_llm_generated_sentiment_response(result_text, low_score, high_score)
+            return sentiment_score, score_justification
+        except ValueError as e:
+            logger.warning(f"Validation failed: {e}")
+            return "Validation Error in LLM Output!"  # Returning error message
 
 async def get_sentiment_score_from_llm(sentiment_adjective, sentiment_explanation, target_audience, scoring_scale_explanation, source_text, model_name):
     populated_prompt_text = generate_llm_sentiment_score_prompt(sentiment_adjective, sentiment_explanation, target_audience, scoring_scale_explanation)
     combined_prompt_text = combine_populated_prompts_with_source_text(populated_prompt_text, source_text)
-    MAX_ATTEMPTS = 10
-    PARALLEL_ATTEMPTS = 3
     backoff_time = 1 
     for attempt in range(MAX_ATTEMPTS // PARALLEL_ATTEMPTS):
         tasks = [parallel_attempt(combined_prompt_text, model_name) for _ in range(PARALLEL_ATTEMPTS)]
         results = await asyncio.gather(*tasks)
         for result in results:
-            if result:
+            if result != "Validation Error in LLM Output!":  # Check for the error message
                 sentiment_score, score_justification = result
                 logger.info(f"Output validation successful! Sentiment Score: {sentiment_score} | Score Justification: {score_justification}")
                 return sentiment_score, score_justification
@@ -1053,7 +1106,21 @@ async def analyze_focus_area_sentiments(focus_key, scoring_scale_explanation, so
         }
     return sentiment_scores
 
-MAX_WORKERS = 5  # Adjust this value based on your system's resources
+def calculate_max_workers(model_memory_requirement, safety_factor=0.75):
+    available_memory = psutil.virtual_memory().available / (1024 ** 2) # Convert to MB
+    max_workers = int((available_memory * safety_factor) / model_memory_requirement)
+    return max_workers
+
+def get_model_memory_requirement(model_name):
+    model_name_pattern = f"models/{model_name}*.bin"
+    model_files = glob.glob(model_name_pattern)
+    if model_files:
+        model_file_path = model_files[0] # Assuming there's only one match
+        model_memory_requirement = os.path.getsize(model_file_path) / (1024 ** 2) # Convert to MB
+        return model_memory_requirement
+    else:
+        raise FileNotFoundError(f"No model file found matching pattern: {model_name_pattern}")
+
 
 # Example usage:
 low_score = -100.0
@@ -1062,6 +1129,12 @@ model_name = "wizardlm-1.0-uncensored-llama2-13b"
 source_text = "The food was delicious but the service was slow." # Example source text
 focus_key = "restaurant_review_focus"
 
+model_memory_requirement = get_model_memory_requirement(model_name)
+print(f"Model memory requirement: {model_memory_requirement} MB")
+MAX_WORKERS = calculate_max_workers(model_memory_requirement)
+print(f"MAX_WORKERS: {MAX_WORKERS}")
+MAX_ATTEMPTS = 12 # How many times to attempt to generate a valid output before giving up
+PARALLEL_ATTEMPTS = 3 # How many parallel attempts to make per iteration
 neutral_score = low_score + (high_score - low_score) / 2
 scoring_scale_explanation = f"on a scale from {low_score} (strongly does NOT exhibit the adjective) to +{high_score} (strongly exhibits the adjective)-- so that {neutral_score} implies that nothing can be determined about the extent to which the adjective is reflected-- based on the contents of a sentence/paragraph/utterance."
 logger.info(f"Scoring scale explanation: {scoring_scale_explanation}")
