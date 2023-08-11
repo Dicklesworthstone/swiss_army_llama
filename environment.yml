@@ -1,0 +1,25 @@
+name: llama_embeddings_fastapi_service_environment
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - fastapi
+  - pydantic
+  - uvicorn
+  - sqlalchemy
+  - python-decouple
+  - psutil
+  - aiosqlite
+  - faiss-cpu
+  - pandas
+  - PyPDF2
+  - python-multipart
+  - python-magic
+  - langchain
+  - scikit-learn
+  - llama-cpp-python
+  - httpx
+  - numba
+  - scipy
+  - hyppo
