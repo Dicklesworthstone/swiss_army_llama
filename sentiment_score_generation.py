@@ -7,11 +7,15 @@ import os
 import sys
 import re
 import json
+import traceback
 import numpy as np
 import pandas as pd
+from filelock import FileLock
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
+from llama_cpp import Llama
+BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 
 
 financial_investor_focus_presets = """
@@ -1012,6 +1016,24 @@ class suppress_stdout_stderr(object):
         os.close ( self.old_stderr_fileno )
         self.outnull_file.close()
         self.errnull_file.close()
+
+def load_inference_model(model_name: str):
+    try:
+        models_dir = os.path.join(BASE_DIRECTORY, 'models') # Determine the model directory path
+        matching_files = glob.glob(os.path.join(models_dir, f"{model_name}*")) # Search for matching model files
+        if not matching_files:
+            logger.error(f"No model file found matching: {model_name}")
+            raise FileNotFoundError
+        matching_files.sort(key=os.path.getmtime, reverse=True) # Sort the files based on modification time (recently modified files first)
+        model_file_path = matching_files[0]
+        model_instance = Llama(model_path=model_file_path, embedding=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, verbose=False, use_mlock=True) # Load the model
+        return model_instance
+    except TypeError as e:
+        logger.error(f"TypeError occurred while loading the model: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Exception occurred while loading the model: {e}")
+        raise FileNotFoundError(f"No model file found matching: {model_name}")
         
 def validate_llm_generated_sentiment_response(llm_raw_output, lowest_possible_score, highest_possible_score):
     use_verbose = 1
@@ -1068,9 +1090,20 @@ def validate_llm_generated_sentiment_response(llm_raw_output, lowest_possible_sc
     return sentiment_score, score_justification
 
 def run_llm_in_process(combined_prompt_text, model_name):
-    with suppress_stdout_stderr():
-        llm_local = load_token_level_embedding_model(model_name)
-    return llm_local(combined_prompt_text)
+    try:
+        logger.info("Running run_llm_in_process with model_name: " + model_name)
+        logger.info("Combined prompt text: " + combined_prompt_text[:100])  # Log the first 100 characters
+        with suppress_stdout_stderr():
+            logger.info("Loading LLM model...")
+            llm_local = load_inference_model(model_name)
+            logger.info("Model loaded successfully.")
+        logger.info("Running model with combined prompt text...")
+        result = llm_local(combined_prompt_text)
+        logger.info("Model run successful.")
+        return result
+    except Exception as e:
+        traceback.print_exc()
+        logger.error(f"An error occurred in run_llm_in_process: {e}", exc_info=True, stack_info=True)
 
 async def parallel_attempt(combined_prompt_text, model_name):
     global lowest_possible_score, highest_possible_score
@@ -1101,8 +1134,14 @@ def combine_llm_generated_sentiment_responses(llm_raw_outputs, lowest_possible_s
     iqr_of_sentiment_score_as_pct_of_mean_score = (interquartile_range_of_sentiment_scores[1] - interquartile_range_of_sentiment_scores[0]) / mean_sentiment_score
     return mean_sentiment_score, sentiment_score_95_pct_confidence_interval, interquartile_range_of_sentiment_scores, iqr_of_sentiment_score_as_pct_of_mean_score, score_justification_strings
 
+def update_summary_table(new_row):
+    lock = FileLock(SUMMARY_TABLE_PATH + ".lock")
+    with lock:
+        summary_table = pd.read_csv(SUMMARY_TABLE_PATH) # Read the existing summary table
+        summary_table.loc[len(summary_table)] = new_row # Add the new row
+        summary_table.to_csv(SUMMARY_TABLE_PATH, index=False) # Write back to the file
+
 async def get_sentiment_score_from_llm(focus_key, sentiment_adjective, sentiment_explanation, target_audience, scoring_scale_explanation, source_text, model_name):
-    global combined_summary_table
     start_time = datetime.utcnow()
     summary_table = pd.DataFrame(columns=['Attempt', 'Successful Runs', 'Failed Runs', 'Time Taken in Seconds', 'Mean Score', '95% CI Lower', '95% CI Upper', 'IQR Lower', 'IQR Upper', 'IQR as Pct of Mean'])
     populated_prompt_text = generate_llm_sentiment_score_prompt(sentiment_adjective, sentiment_explanation, target_audience, scoring_scale_explanation)
@@ -1132,8 +1171,8 @@ async def get_sentiment_score_from_llm(focus_key, sentiment_adjective, sentiment
                 summary_table.loc[len(summary_table)] = [attempt + 1, successful_runs, failed_runs, mean_sentiment_score, *sentiment_score_95_pct_confidence_interval, *interquartile_range_of_sentiment_scores, iqr_of_sentiment_score_as_pct_of_mean_score]
                 finish_time = datetime.utcnow()
                 time_taken_in_seconds = (finish_time - start_time).total_seconds()
-                combined_summary_table.loc[len(combined_summary_table)] = [focus_key, sentiment_adjective, combined_prompt_text, attempt + 1, successful_runs, failed_runs, time_taken_in_seconds, mean_sentiment_score, *sentiment_score_95_pct_confidence_interval, *interquartile_range_of_sentiment_scores, iqr_of_sentiment_score_as_pct_of_mean_score]
-                combined_summary_table.to_csv('combined_summary_table.csv', index=False)
+                new_row = [focus_key, sentiment_adjective, combined_prompt_text, attempt + 1, successful_runs, failed_runs, time_taken_in_seconds, mean_sentiment_score, *sentiment_score_95_pct_confidence_interval, *interquartile_range_of_sentiment_scores, iqr_of_sentiment_score_as_pct_of_mean_score]
+                update_summary_table(new_row)
                 return mean_sentiment_score, sentiment_score_95_pct_confidence_interval, interquartile_range_of_sentiment_scores, iqr_of_sentiment_score_as_pct_of_mean_score, score_justification_strings, summary_table
             except ValueError:
                 logger.error(f"Attempt {attempt + 1} failed to combine outputs despite having enough successful runs. Trying again.")
@@ -1145,7 +1184,6 @@ async def get_sentiment_score_from_llm(focus_key, sentiment_adjective, sentiment
         backoff_time *= 2 # Double the backoff time for the next iteration
     logger.error("Maximum attempts reached without valid output. Please review the LLM's responses.")
     raise Exception("Maximum attempts reached without valid output. Please review the LLM's responses.")
-
 
 async def analyze_focus_area_sentiments(focus_key, scoring_scale_explanation, source_text, model_name):
     analysis_start_time = datetime.utcnow()
@@ -1204,18 +1242,24 @@ model_name = "wizardlm-1.0-uncensored-llama2-13b"
 source_text = "The food was delicious but the service was slow." # Example source text
 focus_key = "restaurant_review_focus"
 
+
 model_memory_requirement = get_model_memory_requirement(model_name)
 print(f"Model memory requirement: {model_memory_requirement} MB")
 MAX_WORKERS = calculate_max_workers(model_memory_requirement)
 print(f"MAX_WORKERS: {MAX_WORKERS}")
-MAX_ATTEMPTS = 20 # How many times to attempt to generate a valid output before giving up
-PARALLEL_ATTEMPTS = 4 # How many parallel attempts to make per iteration
-MIN_SUCCESSFUL_RUNS_TO_GENERATE_SENTIMENT_SCORE = 8 # How many successful runs are required to consider the output valid
+MAX_ATTEMPTS = 12 # How many times to attempt to generate a valid output before giving up
+PARALLEL_ATTEMPTS = 3 # How many parallel attempts to make per iteration
+MIN_SUCCESSFUL_RUNS_TO_GENERATE_SENTIMENT_SCORE = 5 # How many successful runs are required to consider the output valid
+USE_RAMDISK = False
+SUMMARY_TABLE_PATH = 'combined_summary_table.csv'
+LLM_CONTEXT_SIZE_IN_TOKENS = 1024
 neutral_score = lowest_possible_score + (highest_possible_score - lowest_possible_score) / 2
 scoring_scale_explanation = f"on a scale from {lowest_possible_score} (strongly does NOT exhibit the adjective) to +{highest_possible_score} (strongly exhibits the adjective)-- so that {neutral_score} implies that nothing can be determined about the extent to which the adjective is reflected-- based on the contents of a sentence/paragraph/utterance."
 logger.info(f"Scoring scale explanation: {scoring_scale_explanation}")
-# Define global variable combined_summary_table:
-combined_summary_table = pd.DataFrame(columns=['Focus Area', 'Sentiment Adjective', 'Prompt', 'Attempt', 'Successful Runs', 'Failed Runs', 'Mean Score', '95% CI Lower', '95% CI Upper'])
+# Initialize the summary table
+summary_columns = ['Focus Area', 'Sentiment Adjective', 'Prompt', 'Attempt', 'Successful Runs', 'Failed Runs', 'Mean Score', '95% CI Lower', '95% CI Upper']
+initial_summary_table = pd.DataFrame(columns=summary_columns)
+initial_summary_table.to_csv(SUMMARY_TABLE_PATH, index=False)
 
 combined_sentiment_analysis_dict = asyncio.run(analyze_focus_area_sentiments(focus_key, scoring_scale_explanation, source_text, model_name))  # noqa: E501
 with open('combined_sentiment_analysis.json', 'w') as file:

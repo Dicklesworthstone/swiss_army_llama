@@ -17,3 +17,4 @@ httpx
 numba
 scipy
 hyppo
+filelock
