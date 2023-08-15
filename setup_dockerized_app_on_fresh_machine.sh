@@ -6,7 +6,7 @@ sudo apt-get update
 
 # Install Docker
 echo "Installing Docker..."
-sudo apt-get install docker.io
+sudo apt-get install docker.io -y
 
 # Start Docker service
 echo "Starting Docker service..."
