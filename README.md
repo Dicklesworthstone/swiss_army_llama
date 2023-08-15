@@ -131,6 +131,20 @@ username ALL=(ALL) NOPASSWD: /bin/umount /mnt/ramdisk
 
 The application provides functionalities to set up, clear, and manage RAM Disk. RAM Disk is used to store models in memory for faster access. It calculates the available RAM and sets up the RAM Disk accordingly. The functions `setup_ramdisk`, `copy_models_to_ramdisk`, and `clear_ramdisk` manage these tasks.
 
+To run it natively (not using Docker) in a Python venv, you can use these commands:
+
+```bash
+git clone https://github.com/Dicklesworthstone/llama_embeddings_fastapi_service
+cd llama_embeddings_fastapi_service
+python3 -m venv venv
+source venv/bin/activate
+python3 -m pip install --upgrade pip
+python3 -m pip install wheel
+pip install -r requirements.txt
+python3 llama_2_embeddings_fastapi_server.py
+```
+Then access the FastAPI Swagger page at `http://localhost:8089`.
+
 ## API Endpoints
 
 The following endpoints are available:
