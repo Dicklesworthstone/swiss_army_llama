@@ -45,7 +45,7 @@ Watch the the automated setup process in action [here](https://asciinema.org/a/6
 11. **Comprehensive Logging**: Captures essential information with detailed logs, without overwhelming storage or readability.
 12. **Support for Multiple Models and Measures**: Accommodates multiple embedding models and similarity measures, allowing flexibility and customization based on user needs.
 
-## Demo Screen Recording in Action:
+## Demo Screen Recording in Action
 [Here](https://asciinema.org/a/39dZ8vv9nkcNygasUl35wnBPq) is the live console output while I interact with it from the Swagger page to make requests.
 
 ---
