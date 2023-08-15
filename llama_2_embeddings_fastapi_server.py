@@ -403,7 +403,8 @@ def compute_hsic_numpy(x: np.ndarray, y: np.ndarray):
 def download_models() -> List[str]:
     list_of_model_download_urls = [
         'https://huggingface.co/TheBloke/llama2_7b_chat_uncensored-GGML/resolve/main/llama2_7b_chat_uncensored.ggmlv3.q3_K_L.bin',
-        'https://huggingface.co/TheBloke/WizardLM-1.0-Uncensored-Llama2-13B-GGML/resolve/main/wizardlm-1.0-uncensored-llama2-13b.ggmlv3.q3_K_L.bin'
+        'https://huggingface.co/TheBloke/WizardLM-1.0-Uncensored-Llama2-13B-GGML/resolve/main/wizardlm-1.0-uncensored-llama2-13b.ggmlv3.q3_K_L.bin',
+        'https://huggingface.co/maikaarda/bge-base-en-ggml/resolve/main/ggml-model-f32.bin'
     ]
     model_names = [os.path.basename(url) for url in list_of_model_download_urls]
     current_file_path = os.path.abspath(__file__)
