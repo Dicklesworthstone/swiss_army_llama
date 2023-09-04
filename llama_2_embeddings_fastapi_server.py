@@ -82,7 +82,7 @@ else:
     USE_SECURITY_TOKEN = False
 DATABASE_URL = "sqlite+aiosqlite:///embeddings.sqlite"
 LLAMA_EMBEDDING_SERVER_LISTEN_PORT = config("LLAMA_EMBEDDING_SERVER_LISTEN_PORT", default=8089, cast=int)
-DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="llama2_7b_chat_uncensored", cast=str) 
+DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="yarn-llama-2-13b-128k", cast=str) 
 LLM_CONTEXT_SIZE_IN_TOKENS = config("LLM_CONTEXT_SIZE_IN_TOKENS", default=512, cast=int)
 MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING = config("MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING", default=15, cast=int)
 USE_PARALLEL_INFERENCE_QUEUE = config("USE_PARALLEL_INFERENCE_QUEUE", default=False, cast=bool)
@@ -402,9 +402,8 @@ def compute_hsic_numpy(x: np.ndarray, y: np.ndarray):
 
 def download_models() -> List[str]:
     list_of_model_download_urls = [
-        'https://huggingface.co/TheBloke/llama2_7b_chat_uncensored-GGML/resolve/main/llama2_7b_chat_uncensored.ggmlv3.q3_K_L.bin',
-        'https://huggingface.co/TheBloke/WizardLM-1.0-Uncensored-Llama2-13B-GGML/resolve/main/wizardlm-1.0-uncensored-llama2-13b.ggmlv3.q3_K_L.bin',
-        'https://huggingface.co/maikaarda/bge-base-en-ggml/resolve/main/ggml-model-f32.bin'
+        'https://huggingface.co/TheBloke/Yarn-Llama-2-13B-128K-GGUF/resolve/main/yarn-llama-2-13b-128k.Q4_K_M.gguf',
+        'https://huggingface.co/TheBloke/Yarn-Llama-2-7B-128K-GGUF/resolve/main/yarn-llama-2-7b-128k.Q4_K_M.gguf',
     ]
     model_names = [os.path.basename(url) for url in list_of_model_download_urls]
     current_file_path = os.path.abspath(__file__)
@@ -770,7 +769,7 @@ The response will include a JSON object containing the list of available model n
 ### Example Response:
 ```json
 {
-  "model_names": ["llama2_7b_chat_uncensored", "wizardlm-1.0-uncensored-llama2-13b", "my_super_custom_model"]
+  "model_names": ["yarn-llama-2-7b-128k", "yarn-llama-2-13b-128k", "my_super_custom_model"]
 }
 ```""",
          response_description="A JSON object containing the list of available model names.")
@@ -780,7 +779,7 @@ async def get_list_of_available_model_names(token: str = None) -> Dict[str, List
     models_dir = os.path.join(RAMDISK_PATH, 'models') if USE_RAMDISK else os.path.join(BASE_DIRECTORY, 'models')
     logger.info(f"Looking for models in: {models_dir}") # Add this line for debugging
     logger.info(f"Directory content: {os.listdir(models_dir)}") # Add this line for debugging
-    model_files = glob.glob(os.path.join(models_dir, "*.bin")) # Find all files with .ggmlv3.q3_K_L.bin extension
+    model_files = glob.glob(os.path.join(models_dir, "*.bin")) +  glob.glob(os.path.join(models_dir, "*.gguf"))# Find all files with .bin or .gguf extension
     model_names = [os.path.splitext(os.path.splitext(os.path.basename(model_file))[0])[0] for model_file in model_files] # Remove both extensions
     return {"model_names": model_names}
 
@@ -876,7 +875,7 @@ The request must contain the following attributes:
 ```json
 {
   "text": "This is a sample text.",
-  "model_name": "llama2_7b_chat_uncensored"
+  "model_name": "yarn-llama-2-13b-128k"
 }
 ```
 
@@ -923,7 +922,7 @@ The request must contain the following attributes:
 ```json
 {
   "text": "This is a sample text.",
-  "model_name": "llama2_7b_chat_uncensored"
+  "model_name": "yarn-llama-2-13b-128k"
 }
 ```
 
@@ -1064,7 +1063,7 @@ The request must contain the following attributes:
 {
   "text1": "This is a sample text.",
   "text2": "This is another sample text.",
-  "model_name": "llama2_7b_chat_uncensored",
+  "model_name": "yarn-llama-2-13b-128k",
   "similarity_measure": "cosine_similarity"
 }
 ```
@@ -1152,7 +1151,7 @@ The request must contain the following attributes:
 ```json
 {
   "query_text": "Find me the most similar string!",
-  "model_name": "llama2_7b_chat_uncensored",
+  "model_name": "yarn-llama-2-13b-128k",
   "number_of_most_similar_strings_to_return": 5
 }
 ```
