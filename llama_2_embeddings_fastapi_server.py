@@ -1398,11 +1398,10 @@ async def get_all_embedding_vectors_for_document(file: UploadFile = File(...),
         return FileResponse(zip_file_path, headers={"Content-Disposition": f"attachment; filename={original_filename_without_extension}.zip"})
 
 
-@app.post("/get_text_completion_from_input_prompt/",
+@app.post("/get_text_completions_from_input_prompt/",
           response_model=List[TextCompletionResponse],
-          summary="Generate Text Completion for a Given Input Prompt",
-          description="""Generate the text competion for a given input prompt string using the specified model.
-
+          summary="Generate Text Completions for a Given Input Prompt",
+          description="""Generate text competions for a given input prompt string using the specified model.
 ### Parameters:
 - `request`: A JSON object containing the input prompt string (`input_prompt`), the model name, an optional grammar file, an optional number of tokens to generate, and an optional number of completions to generate.
 - `token`: Security token (optional).
@@ -1467,7 +1466,7 @@ The response will include the generated text completion, the time taken to compu
 ]
 ```""", response_description="A JSON object containing the the generated text completion of the input prompt and the request details.")
 
-async def get_text_completion_from_input_prompt(request: TextCompletionRequest, req: Request = None, token: str = None, client_ip: str = None) -> List[TextCompletionResponse]:
+async def get_text_completions_from_input_prompt(request: TextCompletionRequest, req: Request = None, token: str = None, client_ip: str = None) -> List[TextCompletionResponse]:
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
         logger.warning(f"Unauthorized request from client IP {client_ip}")
         raise HTTPException(status_code=403, detail="Unauthorized")
