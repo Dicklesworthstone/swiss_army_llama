@@ -33,7 +33,20 @@ cd llama_embeddings_fastapi_service
 
 # Build the Docker image
 echo "Building the Docker image..."
-sudo docker build -t llama-embeddings .
+arch=$(uname -m)
+base_image="ubuntu:latest"
+
+if [ "$arch" = "x86_64" ]; then
+  echo "Building for x86_64..."
+  sudo docker build --build-arg BASE_IMAGE=$base_image --build-arg ARCH="amd64" -t llama-embeddings .
+elif [ "$arch" = "aarch64" ]; then
+  echo "Building for aarch64..."
+  sudo docker build --build-arg BASE_IMAGE=$base_image --build-arg ARCH="arm64" -t llama-embeddings .
+else
+  echo "Unsupported architecture."
+  exit 1
+fi
+
 
 # Run the Docker container
 echo "Running the Docker container..."

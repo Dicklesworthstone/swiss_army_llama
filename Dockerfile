@@ -1,5 +1,7 @@
-# Use Python 3.9 image
-FROM python:3.9-buster
+# Use Ubuntu latest image
+ARG BASE_IMAGE
+ARG ARCH
+FROM --platform=linux/$ARCH $BASE_IMAGE
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
@@ -9,11 +11,22 @@ WORKDIR /app
 
 # Install system dependencies, including sudo
 RUN apt-get update && apt-get install -y \
+    apt-utils \
     build-essential \
     libpq-dev \
     libmagic1 \
     sudo && \
     rm -rf /var/lib/apt/lists/*
+
+# Install CMake from the Ubuntu repositories
+RUN apt-get update && \
+    apt-get install -y cmake
+
+# Confirm the installed CMake version
+RUN cmake --version
+
+RUN apt-get update && \
+    apt-get install -y python3 python3-pip python-is-python3
 
 # Upgrade pip and install wheel
 RUN python3 -m pip install --upgrade pip && \
