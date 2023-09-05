@@ -160,7 +160,7 @@ The following endpoints are available:
 - **POST `/compute_similarity_between_strings/`**: Compute Similarity Between Two Strings. Compute the similarity between two given input strings using specified model embeddings and a selected similarity measure.
 - **POST `/search_stored_embeddings_with_query_string_for_semantic_similarity/`**: Get Most Similar Strings from Stored Embeddings in Database. Find the most similar strings in the database to the given input "query" text.
 - **POST `/get_all_embedding_vectors_for_document/`**: Get Embeddings for a Document. Extract text embeddings for a document, supporting both plain text and PDF files (PDFs requiring OCR are not supported).
-- **POST `/get_text_completion_from_input_prompt/`**: Get back multiple completions from the specified LLM model, with the ability to specify a grammar file which will enforce a particular format of the response, such as JSON. 
+- **POST `/get_text_completions_from_input_prompt/`**: Get back multiple completions from the specified LLM model, with the ability to specify a grammar file which will enforce a particular format of the response, such as JSON. 
 - **POST `/clear_ramdisk/`**: Clear Ramdisk Endpoint. Clears the RAM Disk if it is enabled.
 
 For detailed request and response schemas, please refer to the Swagger UI available at the root URL or the section at the end of this `README`.
@@ -513,10 +513,10 @@ Retrieve the token-level embeddings and combined feature vector for a given inpu
 - `json_format`: Format for JSON response of token-level embeddings (optional).
 - `send_back_json_or_zip_file`: Whether to return a JSON response or a ZIP file containing the JSON file (optional, defaults to `zip`).
 
-### 10. `/get_text_completion_from_input_prompt/` (POST)
+### 10. `/get_text_completions_from_input_prompt/` (POST)
 
 #### Purpose
-Generate the text completion for a given input prompt using the specified model.
+Generate text completions for a given input prompt using the specified model.
 
 #### Parameters
 - `request`: A JSON object containing various options like `input_prompt`, `llm_model_name`, etc.
