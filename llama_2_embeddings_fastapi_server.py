@@ -1,5 +1,5 @@
 from embeddings_data_models import Base, TextEmbedding, DocumentEmbedding, Document, TokenLevelEmbedding, TokenLevelEmbeddingBundle, TokenLevelEmbeddingBundleCombinedFeatureVector
-from embeddings_data_models import EmbeddingResponse, EmbeddingRequest, SemanticSearchRequest, SemanticSearchResponse, SimilarityRequest, SimilarityResponse, AllStringsResponse, AllDocumentsResponse
+from embeddings_data_models import EmbeddingResponse, EmbeddingRequest, SemanticSearchRequest, SemanticSearchResponse, SimilarityRequest, SimilarityResponse, AllStringsResponse, AllDocumentsResponse, TextCompletionRequest, TextCompletionResponse
 import asyncio
 import glob
 import json
@@ -38,7 +38,7 @@ import faiss
 import pandas as pd
 import PyPDF2
 from magic import Magic
-from llama_cpp import Llama
+from llama_cpp import Llama, LlamaGrammar
 from scipy.stats import rankdata
 from sklearn.preprocessing import KBinsDiscretizer
 from numba import jit
@@ -82,8 +82,12 @@ else:
     USE_SECURITY_TOKEN = False
 DATABASE_URL = "sqlite+aiosqlite:///embeddings.sqlite"
 LLAMA_EMBEDDING_SERVER_LISTEN_PORT = config("LLAMA_EMBEDDING_SERVER_LISTEN_PORT", default=8089, cast=int)
-DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="yarn-llama-2-13b-128k", cast=str) 
+DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="openchat_v3.2_super", cast=str) 
 LLM_CONTEXT_SIZE_IN_TOKENS = config("LLM_CONTEXT_SIZE_IN_TOKENS", default=512, cast=int)
+TEXT_COMPLETION_CONTEXT_SIZE_IN_TOKENS = config("TEXT_COMPLETION_CONTEXT_SIZE_IN_TOKENS", default=4000, cast=int)
+DEFAULT_MAX_COMPLETION_TOKENS = config("DEFAULT_MAX_COMPLETION_TOKENS", default=100, cast=int)
+DEFAULT_NUMBER_OF_COMPLETIONS_TO_GENERATE = config("DEFAULT_NUMBER_OF_COMPLETIONS_TO_GENERATE", default=4, cast=int)
+DEFAULT_COMPLETION_TEMPERATURE = config("DEFAULT_COMPLETION_TEMPERATURE", default=0.7, cast=float)
 MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING = config("MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING", default=15, cast=int)
 USE_PARALLEL_INFERENCE_QUEUE = config("USE_PARALLEL_INFERENCE_QUEUE", default=False, cast=bool)
 MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS = config("MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS", default=10, cast=int)
@@ -97,6 +101,7 @@ JITTER_FACTOR = config("JITTER_FACTOR", default=0.1, cast=float)
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 embedding_model_cache = {} # Model cache to store loaded models
 token_level_embedding_model_cache = {} # Model cache to store loaded token-level embedding models
+text_completion_model_cache = {} # Model cache to store loaded text completion models
 logger.info(f"USE_RAMDISK is set to: {USE_RAMDISK}")
 db_writer = None
 
@@ -126,20 +131,20 @@ class DatabaseWriter:
             TokenLevelEmbeddingBundleCombinedFeatureVector: 'combined_feature_vector_hash'
         }.get(type(operation))
         hash_value = getattr(operation, attr_name, None)
-        model_name = getattr(operation, 'model_name', None)
-        return f"{hash_value}_{model_name}" if hash_value and model_name else None
+        llm_model_name = getattr(operation, 'llm_model_name', None)
+        return f"{hash_value}_{llm_model_name}" if hash_value and llm_model_name else None
 
     async def initialize_processing_hashes(self, chunk_size=1000):
         start_time = datetime.utcnow()
-        logger.info("Initializing process of creating set of input hash/model_name combinations that are either currently being processed or have already been processed...")
+        logger.info("Initializing process of creating set of input hash/llm_model_name combinations that are either currently being processed or have already been processed...")
         async with AsyncSessionLocal() as session:
             queries = [
-                select(TextEmbedding.text_hash, TextEmbedding.model_name),
-                select(DocumentEmbedding.file_hash, DocumentEmbedding.model_name),
-                select(Document.document_hash, Document.model_name),
-                select(TokenLevelEmbedding.token_hash, TokenLevelEmbedding.model_name),
-                select(TokenLevelEmbeddingBundle.input_text_hash, TokenLevelEmbeddingBundle.model_name),
-                select(TokenLevelEmbeddingBundleCombinedFeatureVector.combined_feature_vector_hash, TokenLevelEmbeddingBundleCombinedFeatureVector.model_name)
+                select(TextEmbedding.text_hash, TextEmbedding.llm_model_name),
+                select(DocumentEmbedding.file_hash, DocumentEmbedding.llm_model_name),
+                select(Document.document_hash, Document.llm_model_name),
+                select(TokenLevelEmbedding.token_hash, TokenLevelEmbedding.llm_model_name),
+                select(TokenLevelEmbeddingBundle.input_text_hash, TokenLevelEmbeddingBundle.llm_model_name),
+                select(TokenLevelEmbeddingBundleCombinedFeatureVector.combined_feature_vector_hash, TokenLevelEmbeddingBundleCombinedFeatureVector.llm_model_name)
             ]
             for query in queries:
                 offset = 0
@@ -149,23 +154,23 @@ class DatabaseWriter:
                     if not rows:
                         break
                     for row in rows:
-                        hash_with_model = f"{row[0]}_{row[1]}" # Concatenating hash with model_name
+                        hash_with_model = f"{row[0]}_{row[1]}" # Concatenating hash with llm_model_name
                         self.processing_hashes.add(hash_with_model)
                     offset += chunk_size
         end_time = datetime.utcnow()
         total_time = (end_time - start_time).total_seconds()
         if len(self.processing_hashes) > 0:
-            logger.info(f"Finished initializing set of input hash/model_name combinations that are either currently being processed or have already been processed. Set size: {len(self.processing_hashes)}; Took {total_time} seconds, for an average of {total_time / len(self.processing_hashes)} seconds per hash.")
+            logger.info(f"Finished initializing set of input hash/llm_model_name combinations that are either currently being processed or have already been processed. Set size: {len(self.processing_hashes)}; Took {total_time} seconds, for an average of {total_time / len(self.processing_hashes)} seconds per hash.")
 
     async def _handle_integrity_error(self, e, write_operation, session):
         unique_constraint_msg = {
-            TextEmbedding: "token_embeddings.token_hash, token_embeddings.model_name",
-            DocumentEmbedding: "document_embeddings.file_hash, document_embeddings.model_name",
-            TokenLevelEmbedding: "token_level_embeddings.token_hash, token_level_embeddings.model_name",
-            TokenLevelEmbeddingBundle: "token_level_embedding_bundles.input_text_hash, token_level_embedding_bundles.model_name",
+            TextEmbedding: "token_embeddings.token_hash, token_embeddings.llm_model_name",
+            DocumentEmbedding: "document_embeddings.file_hash, document_embeddings.llm_model_name",
+            TokenLevelEmbedding: "token_level_embeddings.token_hash, token_level_embeddings.llm_model_name",
+            TokenLevelEmbeddingBundle: "token_level_embedding_bundles.input_text_hash, token_level_embedding_bundles.llm_model_name",
         }.get(type(write_operation))
         if unique_constraint_msg and unique_constraint_msg in str(e):
-            logger.warning(f"Embedding already exists in the database for given input and model_name: {e}")
+            logger.warning(f"Embedding already exists in the database for given input and llm_model_name: {e}")
             await session.rollback()
         else:
             raise
@@ -311,42 +316,42 @@ async def build_faiss_indexes():
     token_faiss_indexes = {} # Separate FAISS indexes for token-level embeddings
     associated_texts_by_model = defaultdict(list)  # Create a dictionary to store associated texts by model name
     async with AsyncSessionLocal() as session:
-        result = await session.execute(sql_text("SELECT model_name, text, embedding_json FROM embeddings")) # Query regular embeddings
-        token_result = await session.execute(sql_text("SELECT model_name, token, token_level_embedding_json FROM token_level_embeddings")) # Query token-level embeddings
+        result = await session.execute(sql_text("SELECT llm_model_name, text, embedding_json FROM embeddings")) # Query regular embeddings
+        token_result = await session.execute(sql_text("SELECT llm_model_name, token, token_level_embedding_json FROM token_level_embeddings")) # Query token-level embeddings
         embeddings_by_model = defaultdict(list)
         token_embeddings_by_model = defaultdict(list)
         for row in result.fetchall(): # Process regular embeddings
-            model_name = row[0]
-            associated_texts_by_model[model_name].append(row[1])  # Store the associated text by model name
-            embeddings_by_model[model_name].append((row[1], json.loads(row[2])))
+            llm_model_name = row[0]
+            associated_texts_by_model[llm_model_name].append(row[1])  # Store the associated text by model name
+            embeddings_by_model[llm_model_name].append((row[1], json.loads(row[2])))
         for row in token_result.fetchall(): # Process token-level embeddings
-            model_name = row[0]
-            token_embeddings_by_model[model_name].append(json.loads(row[2]))
-        for model_name, embeddings in embeddings_by_model.items():
-            logger.info(f"Building Faiss index over embdeddings for model {model_name}...")
+            llm_model_name = row[0]
+            token_embeddings_by_model[llm_model_name].append(json.loads(row[2]))
+        for llm_model_name, embeddings in embeddings_by_model.items():
+            logger.info(f"Building Faiss index over embdeddings for model {llm_model_name}...")
             embeddings_array = np.array([e[1] for e in embeddings]).astype('float32')
             if embeddings_array.size == 0:
-                logger.error(f"No embeddings were loaded from the database for model {model_name}, so nothing to build the Faiss index with!")
+                logger.error(f"No embeddings were loaded from the database for model {llm_model_name}, so nothing to build the Faiss index with!")
                 continue
-            logger.info(f"Loaded {len(embeddings_array)} embeddings for model {model_name}.")
-            logger.info(f"Embedding dimension for model {model_name}: {embeddings_array.shape[1]}")
-            logger.info(f"Normalizing {len(embeddings_array)} embeddings for model {model_name}...")
+            logger.info(f"Loaded {len(embeddings_array)} embeddings for model {llm_model_name}.")
+            logger.info(f"Embedding dimension for model {llm_model_name}: {embeddings_array.shape[1]}")
+            logger.info(f"Normalizing {len(embeddings_array)} embeddings for model {llm_model_name}...")
             faiss.normalize_L2(embeddings_array)  # Normalize the vectors for cosine similarity
             faiss_index = faiss.IndexFlatIP(embeddings_array.shape[1])  # Use IndexFlatIP for cosine similarity
             faiss_index.add(embeddings_array)
-            logger.info(f"Faiss index built for model {model_name}.")
-            faiss_indexes[model_name] = faiss_index  # Store the index by model name
-        for model_name, token_embeddings in token_embeddings_by_model.items():
+            logger.info(f"Faiss index built for model {llm_model_name}.")
+            faiss_indexes[llm_model_name] = faiss_index  # Store the index by model name
+        for llm_model_name, token_embeddings in token_embeddings_by_model.items():
             token_embeddings_array = np.array(token_embeddings).astype('float32')
             if token_embeddings_array.size == 0:
-                logger.error(f"No token-level embeddings were loaded from the database for model {model_name}, so nothing to build the Faiss index with!")
+                logger.error(f"No token-level embeddings were loaded from the database for model {llm_model_name}, so nothing to build the Faiss index with!")
                 continue
-            logger.info(f"Normalizing {len(token_embeddings_array)} token-level embeddings for model {model_name}...")
+            logger.info(f"Normalizing {len(token_embeddings_array)} token-level embeddings for model {llm_model_name}...")
             faiss.normalize_L2(token_embeddings_array)  # Normalize the vectors for cosine similarity
             token_faiss_index = faiss.IndexFlatIP(token_embeddings_array.shape[1])  # Use IndexFlatIP for cosine similarity
             token_faiss_index.add(token_embeddings_array)
-            logger.info(f"Token-level Faiss index built for model {model_name}.")
-            token_faiss_indexes[model_name] = token_faiss_index  # Store the token-level index by model name
+            logger.info(f"Token-level Faiss index built for model {llm_model_name}.")
+            token_faiss_indexes[llm_model_name] = token_faiss_index  # Store the token-level index by model name
     return faiss_indexes, token_faiss_indexes, associated_texts_by_model
 
 @jit(nopython=True)
@@ -404,6 +409,9 @@ def download_models() -> List[str]:
     list_of_model_download_urls = [
         'https://huggingface.co/TheBloke/Yarn-Llama-2-13B-128K-GGUF/resolve/main/yarn-llama-2-13b-128k.Q4_K_M.gguf',
         'https://huggingface.co/TheBloke/Yarn-Llama-2-7B-128K-GGUF/resolve/main/yarn-llama-2-7b-128k.Q4_K_M.gguf',
+        'https://huggingface.co/TheBloke/openchat_v3.2_super-GGUF/resolve/main/openchat_v3.2_super.Q4_K_M.gguf',
+        'https://huggingface.co/TheBloke/Phind-CodeLlama-34B-Python-v1-GGUF/resolve/main/phind-codellama-34b-python-v1.Q4_K_M.gguf',
+        
     ]
     model_names = [os.path.basename(url) for url in list_of_model_download_urls]
     current_file_path = os.path.abspath(__file__)
@@ -414,7 +422,7 @@ def download_models() -> List[str]:
         ramdisk_models_dir = os.path.join(RAMDISK_PATH, 'models')
         if not os.path.exists(RAMDISK_PATH): # Check if RAM disk exists, and set it up if not
             setup_ramdisk()
-        if all(os.path.exists(os.path.join(ramdisk_models_dir, model_name)) for model_name in model_names): # Check if models already exist in RAM disk
+        if all(os.path.exists(os.path.join(ramdisk_models_dir, llm_model_name)) for llm_model_name in model_names): # Check if models already exist in RAM disk
             logger.info("Models found in RAM Disk.")
             return model_names
     if not os.path.exists(models_dir): # Check if models directory exists, and create it if not
@@ -435,60 +443,60 @@ def download_models() -> List[str]:
     logger.info("Model downloads completed.")
     return model_names
 
-async def get_embedding_from_db(text: str, model_name: str):
+async def get_embedding_from_db(text: str, llm_model_name: str):
     text_hash = sha3_256(text.encode('utf-8')).hexdigest() # Compute the hash
-    return await execute_with_retry(_get_embedding_from_db, text_hash, model_name)
+    return await execute_with_retry(_get_embedding_from_db, text_hash, llm_model_name)
 
-async def _get_embedding_from_db(text_hash: str, model_name: str) -> Optional[dict]:
+async def _get_embedding_from_db(text_hash: str, llm_model_name: str) -> Optional[dict]:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            sql_text("SELECT embedding_json FROM embeddings WHERE text_hash=:text_hash AND model_name=:model_name"),
-            {"text_hash": text_hash, "model_name": model_name},
+            sql_text("SELECT embedding_json FROM embeddings WHERE text_hash=:text_hash AND llm_model_name=:llm_model_name"),
+            {"text_hash": text_hash, "llm_model_name": llm_model_name},
         )
         row = result.fetchone()
         if row:
             embedding_json = row[0]
-            logger.info(f"Embedding found in database for text hash '{text_hash}' using model '{model_name}'")
+            logger.info(f"Embedding found in database for text hash '{text_hash}' using model '{llm_model_name}'")
             return json.loads(embedding_json)
         return None
     
 async def get_or_compute_embedding(request: EmbeddingRequest, req: Request = None, client_ip: str = None) -> dict:
     request_time = datetime.utcnow()  # Capture request time as datetime object
     ip_address = client_ip or (req.client.host if req else "localhost") # If client_ip is provided, use it; otherwise, try to get from req; if not available, default to "localhost"
-    logger.info(f"Received request for embedding for '{request.text}' using model '{request.model_name}' from IP address '{ip_address}'")
-    embedding_list = await get_embedding_from_db(request.text, request.model_name) # Check if embedding exists in the database
+    logger.info(f"Received request for embedding for '{request.text}' using model '{request.llm_model_name}' from IP address '{ip_address}'")
+    embedding_list = await get_embedding_from_db(request.text, request.llm_model_name) # Check if embedding exists in the database
     if embedding_list is not None:
         response_time = datetime.utcnow()  # Capture response time as datetime object
         total_time = (response_time - request_time).total_seconds()  # Calculate time taken in seconds
-        logger.info(f"Embedding found in database for '{request.text}' using model '{request.model_name}'; returning in {total_time:.4f} seconds")
+        logger.info(f"Embedding found in database for '{request.text}' using model '{request.llm_model_name}'; returning in {total_time:.4f} seconds")
         return {"embedding": embedding_list}
-    model = load_model(request.model_name)
+    model = load_model(request.llm_model_name)
     embedding_list = calculate_sentence_embedding(model, request.text) # Compute the embedding if not in the database
     if embedding_list is None:
-        logger.error(f"Could not calculate the embedding for the given text: '{request.text}' using model '{request.model_name}!'")
+        logger.error(f"Could not calculate the embedding for the given text: '{request.text}' using model '{request.llm_model_name}!'")
         raise HTTPException(status_code=400, detail="Could not calculate the embedding for the given text")
     embedding_json = json.dumps(embedding_list) # Serialize the numpy array to JSON and save to the database
     response_time = datetime.utcnow()  # Capture response time as datetime object
     total_time = (response_time - request_time).total_seconds() # Calculate total time using datetime objects
     word_length_of_input_text = len(request.text.split())
     if word_length_of_input_text > 0:
-        logger.info(f"Embedding calculated for '{request.text}' using model '{request.model_name}' in {total_time} seconds, or an average of {total_time/word_length_of_input_text :.2f} seconds per word. Now saving to database...")
-    await save_embedding_to_db(request.text, request.model_name, embedding_json, ip_address, request_time, response_time, total_time)
+        logger.info(f"Embedding calculated for '{request.text}' using model '{request.llm_model_name}' in {total_time} seconds, or an average of {total_time/word_length_of_input_text :.2f} seconds per word. Now saving to database...")
+    await save_embedding_to_db(request.text, request.llm_model_name, embedding_json, ip_address, request_time, response_time, total_time)
     return {"embedding": embedding_list}
 
-async def save_embedding_to_db(text: str, model_name: str, embedding_json: str, ip_address: str, request_time: datetime, response_time: datetime, total_time: float):
-    existing_embedding = await get_embedding_from_db(text, model_name) # Check if the embedding already exists
+async def save_embedding_to_db(text: str, llm_model_name: str, embedding_json: str, ip_address: str, request_time: datetime, response_time: datetime, total_time: float):
+    existing_embedding = await get_embedding_from_db(text, llm_model_name) # Check if the embedding already exists
     if existing_embedding is not None:
         return existing_embedding
-    return await execute_with_retry(_save_embedding_to_db, text, model_name, embedding_json, ip_address, request_time, response_time, total_time)
+    return await execute_with_retry(_save_embedding_to_db, text, llm_model_name, embedding_json, ip_address, request_time, response_time, total_time)
 
-async def _save_embedding_to_db(text: str, model_name: str, embedding_json: str, ip_address: str, request_time: datetime, response_time: datetime, total_time: float):
-    existing_embedding = await get_embedding_from_db(text, model_name)
+async def _save_embedding_to_db(text: str, llm_model_name: str, embedding_json: str, ip_address: str, request_time: datetime, response_time: datetime, total_time: float):
+    existing_embedding = await get_embedding_from_db(text, llm_model_name)
     if existing_embedding:
         return existing_embedding
     embedding = TextEmbedding(
         text=text,
-        model_name=model_name,
+        llm_model_name=llm_model_name,
         embedding_json=embedding_json,
         ip_address=ip_address,
         request_time=request_time,
@@ -497,20 +505,20 @@ async def _save_embedding_to_db(text: str, model_name: str, embedding_json: str,
     )
     await db_writer.enqueue_write([embedding])  # Enqueue the write operation using the db_writer instance
 
-def load_model(model_name: str, raise_http_exception: bool = True):
+def load_model(llm_model_name: str, raise_http_exception: bool = True):
     try:
         models_dir = os.path.join(RAMDISK_PATH, 'models') if USE_RAMDISK else os.path.join(BASE_DIRECTORY, 'models')
-        if model_name in embedding_model_cache:
-            return embedding_model_cache[model_name]
-        matching_files = glob.glob(os.path.join(models_dir, f"{model_name}*"))
+        if llm_model_name in embedding_model_cache:
+            return embedding_model_cache[llm_model_name]
+        matching_files = glob.glob(os.path.join(models_dir, f"{llm_model_name}*"))
         if not matching_files:
-            logger.error(f"No model file found matching: {model_name}")
+            logger.error(f"No model file found matching: {llm_model_name}")
             raise FileNotFoundError
         matching_files.sort(key=os.path.getmtime, reverse=True)
         model_file_path = matching_files[0]
         model_instance = LlamaCppEmbeddings(model_path=model_file_path, use_mlock=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS)
         model_instance.client.verbose = False
-        embedding_model_cache[model_name] = model_instance
+        embedding_model_cache[llm_model_name] = model_instance
         return model_instance
     except TypeError as e:
         logger.error(f"TypeError occurred while loading the model: {e}")
@@ -520,21 +528,21 @@ def load_model(model_name: str, raise_http_exception: bool = True):
         if raise_http_exception:
             raise HTTPException(status_code=404, detail="Model file not found")
         else:
-            raise FileNotFoundError(f"No model file found matching: {model_name}")
+            raise FileNotFoundError(f"No model file found matching: {llm_model_name}")
 
-def load_token_level_embedding_model(model_name: str, raise_http_exception: bool = True):
+def load_token_level_embedding_model(llm_model_name: str, raise_http_exception: bool = True):
     try:
-        if model_name in token_level_embedding_model_cache: # Check if the model is already loaded in the cache
-            return token_level_embedding_model_cache[model_name]
+        if llm_model_name in token_level_embedding_model_cache: # Check if the model is already loaded in the cache
+            return token_level_embedding_model_cache[llm_model_name]
         models_dir = os.path.join(RAMDISK_PATH, 'models') if USE_RAMDISK else os.path.join(BASE_DIRECTORY, 'models') # Determine the model directory path
-        matching_files = glob.glob(os.path.join(models_dir, f"{model_name}*")) # Search for matching model files
+        matching_files = glob.glob(os.path.join(models_dir, f"{llm_model_name}*")) # Search for matching model files
         if not matching_files:
-            logger.error(f"No model file found matching: {model_name}")
+            logger.error(f"No model file found matching: {llm_model_name}")
             raise FileNotFoundError
         matching_files.sort(key=os.path.getmtime, reverse=True) # Sort the files based on modification time (recently modified files first)
         model_file_path = matching_files[0]
         model_instance = Llama(model_path=model_file_path, embedding=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, verbose=False) # Load the model
-        token_level_embedding_model_cache[model_name] = model_instance # Cache the loaded model
+        token_level_embedding_model_cache[llm_model_name] = model_instance # Cache the loaded model
         return model_instance
     except TypeError as e:
         logger.error(f"TypeError occurred while loading the model: {e}")
@@ -544,7 +552,7 @@ def load_token_level_embedding_model(model_name: str, raise_http_exception: bool
         if raise_http_exception:
             raise HTTPException(status_code=404, detail="Model file not found")
         else:
-            raise FileNotFoundError(f"No model file found matching: {model_name}")
+            raise FileNotFoundError(f"No model file found matching: {llm_model_name}")
 
 async def compute_token_level_embedding_bundle_combined_feature_vector(token_level_embeddings) -> List[float]:
     start_time = datetime.utcnow()
@@ -589,17 +597,17 @@ async def get_or_compute_token_level_embedding_bundle_combined_feature_vector(to
     await db_writer.enqueue_write([combined_feature_vector_db_object])
     return combined_feature_vector
 
-async def calculate_token_level_embeddings(text: str, model_name: str, client_ip: str, token_level_embedding_bundle_id: int) -> List[np.array]:
+async def calculate_token_level_embeddings(text: str, llm_model_name: str, client_ip: str, token_level_embedding_bundle_id: int) -> List[np.array]:
     request_time = datetime.utcnow()
-    logger.info(f"Starting token-level embedding calculation for text: '{text}' using model: '{model_name}'")
-    logger.info(f"Loading model: '{model_name}'")
-    llm = load_token_level_embedding_model(model_name)  # Assuming this method returns an instance of the Llama class
+    logger.info(f"Starting token-level embedding calculation for text: '{text}' using model: '{llm_model_name}'")
+    logger.info(f"Loading model: '{llm_model_name}'")
+    llm = load_token_level_embedding_model(llm_model_name)  # Assuming this method returns an instance of the Llama class
     token_embeddings = []
     tokens = text.split()  # Simple whitespace tokenizer; can be replaced with a more advanced one if needed
     logger.info(f"Tokenized text into {len(tokens)} tokens")
     for idx, token in enumerate(tokens, start=1):
         try:  # Check if the embedding is already available in the database
-            existing_embedding = await get_token_level_embedding_from_db(token, model_name)
+            existing_embedding = await get_token_level_embedding_from_db(token, llm_model_name)
             if existing_embedding is not None:
                 token_embeddings.append(np.array(existing_embedding))
                 logger.info(f"Embedding retrieved from database for token '{token}'")
@@ -610,31 +618,31 @@ async def calculate_token_level_embeddings(text: str, model_name: str, client_ip
             token_embeddings.append(token_embedding_array)
             response_time = datetime.utcnow()
             token_level_embedding_json = json.dumps(token_embedding_array.tolist())
-            await store_token_level_embeddings_in_db(token, model_name, token_level_embedding_json, client_ip, request_time, response_time, token_level_embedding_bundle_id)
+            await store_token_level_embeddings_in_db(token, llm_model_name, token_level_embedding_json, client_ip, request_time, response_time, token_level_embedding_bundle_id)
         except RuntimeError as e:
             logger.error(f"Failed to calculate embedding for token '{token}': {e}")
     logger.info(f"Completed token embedding calculation for all tokens in text: '{text}'")
     return token_embeddings
 
-async def get_token_level_embedding_from_db(token: str, model_name: str) -> Optional[List[float]]:
+async def get_token_level_embedding_from_db(token: str, llm_model_name: str) -> Optional[List[float]]:
     token_hash = sha3_256(token.encode('utf-8')).hexdigest() # Compute the hash
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            sql_text("SELECT token_level_embedding_json FROM token_level_embeddings WHERE token_hash=:token_hash AND model_name=:model_name"),
-            {"token_hash": token_hash, "model_name": model_name},
+            sql_text("SELECT token_level_embedding_json FROM token_level_embeddings WHERE token_hash=:token_hash AND llm_model_name=:llm_model_name"),
+            {"token_hash": token_hash, "llm_model_name": llm_model_name},
         )
         row = result.fetchone()
         if row:
             embedding_json = row[0]
-            logger.info(f"Embedding found in database for token hash '{token_hash}' using model '{model_name}'")
+            logger.info(f"Embedding found in database for token hash '{token_hash}' using model '{llm_model_name}'")
             return json.loads(embedding_json)
         return None
 
-async def store_token_level_embeddings_in_db(token: str, model_name: str, token_level_embedding_json: str, ip_address: str, request_time: datetime, response_time: datetime, token_level_embedding_bundle_id: int):
+async def store_token_level_embeddings_in_db(token: str, llm_model_name: str, token_level_embedding_json: str, ip_address: str, request_time: datetime, response_time: datetime, token_level_embedding_bundle_id: int):
     total_time = (response_time - request_time).total_seconds()
     embedding = TokenLevelEmbedding(
         token=token,
-        model_name=model_name,
+        llm_model_name=llm_model_name,
         token_level_embedding_json=token_level_embedding_json,
         ip_address=ip_address,
         request_time=request_time,
@@ -664,7 +672,7 @@ def calculate_sentence_embedding(llama: Llama, text: str) -> np.array:
         logger.error("Failed to calculate sentence embedding after multiple attempts")
     return sentence_embedding
 
-async def compute_embeddings_for_document(strings: list, model_name: str, client_ip: str) -> List[Tuple[str, np.array]]:
+async def compute_embeddings_for_document(strings: list, llm_model_name: str, client_ip: str) -> List[Tuple[str, np.array]]:
     results = []
     if USE_PARALLEL_INFERENCE_QUEUE:
         logger.info(f"Using parallel inference queue to compute embeddings for {len(strings)} strings")
@@ -673,7 +681,7 @@ async def compute_embeddings_for_document(strings: list, model_name: str, client
         async def compute_embedding(text):  # Define a function to compute the embedding for a given text
             try:
                 async with semaphore:  # Acquire a semaphore slot
-                    request = EmbeddingRequest(text=text, model_name=model_name)
+                    request = EmbeddingRequest(text=text, llm_model_name=llm_model_name)
                     embedding = await get_embedding_vector_for_string(request, client_ip=client_ip)
                     return text, embedding["embedding"]
             except Exception as e:
@@ -688,7 +696,7 @@ async def compute_embeddings_for_document(strings: list, model_name: str, client
         logger.info(f"Using sequential inference to compute embeddings for {len(strings)} strings")
         start_time = time.perf_counter()  # Record the start time
         for s in strings:
-            embedding_request = EmbeddingRequest(text=s, model_name=model_name)
+            embedding_request = EmbeddingRequest(text=s, llm_model_name=llm_model_name)
             embedding = await get_embedding_vector_for_string(embedding_request, client_ip=client_ip)
             results.append((s, embedding["embedding"]))
         end_time = time.perf_counter()  # Record the end time
@@ -698,9 +706,9 @@ async def compute_embeddings_for_document(strings: list, model_name: str, client
     filtered_results = [(text, embedding) for text, embedding in results if embedding is not None] # Filter out results with None embeddings (applicable to parallel processing) and return
     return filtered_results
 
-async def store_document_embeddings_in_db(file: File, file_hash: str, original_file_content: bytes, json_content: bytes, results: List[Tuple[str, np.array]], model_name: str, client_ip: str, request_time: datetime):
+async def store_document_embeddings_in_db(file: File, file_hash: str, original_file_content: bytes, json_content: bytes, results: List[Tuple[str, np.array]], llm_model_name: str, client_ip: str, request_time: datetime):
     document = Document() # Create Document object
-    document.model_name = model_name
+    document.llm_model_name = llm_model_name
     def handle_document_id(ids): # Define a callback to handle the document ID
         document_id = ids[0]
         asyncio.create_task(continue_storing(document_id))
@@ -713,7 +721,7 @@ async def store_document_embeddings_in_db(file: File, file_hash: str, original_f
             filename=file.filename,
             mimetype=file.content_type,
             file_hash=file_hash,
-            model_name=model_name,
+            llm_model_name=llm_model_name,
             file_data=original_file_content,
             document_embedding_results_json=json.loads(json_content.decode()),
             ip_address=client_ip,
@@ -725,10 +733,10 @@ async def store_document_embeddings_in_db(file: File, file_hash: str, original_f
         write_operations = [] # Collect text embeddings to write
         logger.info(f"Storing {len(results)} text embeddings in database")
         for text, embedding in results:
-            embedding_entry = await _get_embedding_from_db(text, model_name)
+            embedding_entry = await _get_embedding_from_db(text, llm_model_name)
             if not embedding_entry:
                 embedding_entry = TextEmbedding(text=text,
-                                                model_name=model_name,
+                                                llm_model_name=llm_model_name,
                                                 embedding_json=json.dumps(embedding),
                                                 ip_address=client_ip,
                                                 request_time=request_time,
@@ -738,6 +746,74 @@ async def store_document_embeddings_in_db(file: File, file_hash: str, original_f
             else:                               
                 write_operations.append(embedding_entry)
         await db_writer.enqueue_write(write_operations) # Enqueue the write operation for text embeddings
+
+def load_text_completion_model(llm_model_name: str, raise_http_exception: bool = True):
+    try:
+        if llm_model_name in text_completion_model_cache: # Check if the model is already loaded in the cache
+            return text_completion_model_cache[llm_model_name]
+        models_dir = os.path.join(RAMDISK_PATH, 'models') if USE_RAMDISK else os.path.join(BASE_DIRECTORY, 'models') # Determine the model directory path
+        matching_files = glob.glob(os.path.join(models_dir, f"{llm_model_name}*")) # Search for matching model files
+        if not matching_files:
+            logger.error(f"No model file found matching: {llm_model_name}")
+            raise FileNotFoundError
+        matching_files.sort(key=os.path.getmtime, reverse=True) # Sort the files based on modification time (recently modified files first)
+        model_file_path = matching_files[0]
+        model_instance = Llama(model_path=model_file_path, embedding=True, n_ctx=TEXT_COMPLETION_CONTEXT_SIZE_IN_TOKENS, verbose=False) # Load the model
+        text_completion_model_cache[llm_model_name] = model_instance # Cache the loaded model
+        return model_instance
+    except TypeError as e:
+        logger.error(f"TypeError occurred while loading the model: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Exception occurred while loading the model: {e}")
+        if raise_http_exception:
+            raise HTTPException(status_code=404, detail="Model file not found")
+        else:
+            raise FileNotFoundError(f"No model file found matching: {llm_model_name}")
+        
+async def generate_completion_from_llm(request: TextCompletionRequest, req: Request = None, client_ip: str = None) -> List[TextCompletionResponse]:
+    request_time = datetime.utcnow()
+    logger.info(f"Starting text completion calculation using model: '{request.llm_model_name}'for input prompt: '{request.input_prompt}'")
+    logger.info(f"Loading model: '{request.llm_model_name}'")
+    llm = load_text_completion_model(request.llm_model_name)
+    list_of_llm_outputs = []
+    if request.grammar_file_string != "":
+        list_of_grammar_files = glob.glob("./grammar_files/*.gbnf")
+        matching_grammer_files = [x for x in list_of_grammar_files if request.grammar_file_string in x]
+        if len(matching_grammer_files) == 0:
+            logger.error(f"No grammar file found matching: {request.grammar_file_string}")
+            raise FileNotFoundError
+        matching_grammer_files.sort(key=os.path.getmtime, reverse=True) # Sort the files based on modification time (recently modified files first)
+        grammar_file_path = matching_grammer_files[0]
+        logger.info(f"Loading selected grammar file: '{grammar_file_path}'")
+        llama_grammar = LlamaGrammar.from_file(grammar_file_path)
+        for ii in range(request.number_of_completions_to_generate):
+            logger.info(f"Generating completion {ii+1} of {request.number_of_completions_to_generate} with model {request.llm_model_name} for input prompt: '{request.input_prompt}'")
+            output = llm(prompt=request.input_prompt, grammar=llama_grammar, max_tokens=request.number_of_tokens_to_generate, temperature=request.temperature)
+            list_of_llm_outputs.append(output)
+    else:
+        for ii in range(request.number_of_completions_to_generate):
+            output = llm(prompt=request.input_prompt, max_tokens=request.number_of_tokens_to_generate, temperature=request.temperature)
+            list_of_llm_outputs.append(output)
+    response_time = datetime.utcnow()
+    total_time_per_completion = ((response_time - request_time).total_seconds()) / request.number_of_completions_to_generate
+    list_of_responses = []
+    for idx, current_completion_output in enumerate(list_of_llm_outputs):
+        generated_text = current_completion_output['choices'][0]['text']
+        if request.grammar_file_string == 'json':
+            generated_text = generated_text.encode('unicode_escape').decode()
+        llm_model_usage_json = json.dumps(current_completion_output['usage'])
+        logger.info(f"Completed text completion {idx} in an average of {total_time_per_completion:.2f} seconds for input prompt: '{request.input_prompt}'; Beginning of generated text: \n'{generated_text[:100]}'")
+        response = TextCompletionResponse(input_prompt = request.input_prompt,
+                                            llm_model_name = request.llm_model_name,
+                                            grammar_file_string = request.grammar_file_string,
+                                            number_of_tokens_to_generate = request.number_of_tokens_to_generate,
+                                            number_of_completions_to_generate = request.number_of_completions_to_generate,
+                                            time_taken_in_seconds = float(total_time_per_completion),
+                                            generated_text = generated_text,
+                                            llm_model_usage_json = llm_model_usage_json)
+        list_of_responses.append(response)
+    return list_of_responses
 
 @app.exception_handler(SQLAlchemyError) 
 async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError) -> JSONResponse:
@@ -769,7 +845,7 @@ The response will include a JSON object containing the list of available model n
 ### Example Response:
 ```json
 {
-  "model_names": ["yarn-llama-2-7b-128k", "yarn-llama-2-13b-128k", "my_super_custom_model"]
+  "model_names": ["yarn-llama-2-7b-128k", "yarn-llama-2-13b-128k", "openchat_v3.2_super", "phind-codellama-34b-python-v1", "my_super_custom_model"]
 }
 ```""",
          response_description="A JSON object containing the list of available model names.")
@@ -869,13 +945,13 @@ async def get_all_stored_documents(req: Request, token: str = None) -> AllDocume
 ### Request JSON Format:
 The request must contain the following attributes:
 - `text`: The input text for which the embedding vector is to be retrieved.
-- `model_name`: The model used to calculate the embedding (optional, will use the default model if not provided).
+- `llm_model_name`: The model used to calculate the embedding (optional, will use the default model if not provided).
 
-### Example (note that `model_name` is optional):
+### Example (note that `llm_model_name` is optional):
 ```json
 {
   "text": "This is a sample text.",
-  "model_name": "yarn-llama-2-13b-128k"
+  "llm_model_name": "openchat_v3.2_super"
 }
 ```
 
@@ -916,13 +992,13 @@ async def get_embedding_vector_for_string(request: EmbeddingRequest, req: Reques
 ### Request JSON Format:
 The request must contain the following attributes:
 - `text`: The input text for which the embeddings are to be retrieved.
-- `model_name`: The model used to calculate the embeddings (optional).
+- `llm_model_name`: The model used to calculate the embeddings (optional).
 
 ### Example Request:
 ```json
 {
   "text": "This is a sample text.",
-  "model_name": "yarn-llama-2-13b-128k"
+  "llm_model_name": "openchat_v3.2_super"
 }
 ```
 
@@ -965,7 +1041,7 @@ async def get_token_level_embeddings_matrix_and_combined_feature_vector_for_stri
     json_format: str = 'records',
     send_back_json_or_zip_file: str = 'zip'
 ) -> Response:
-    logger.info(f"Received request for token embeddings with text length {len(request.text)} and model: '{request.model_name}' from client IP: {client_ip}; input text: {request.text}")
+    logger.info(f"Received request for token embeddings with text length {len(request.text)} and model: '{request.llm_model_name}' from client IP: {client_ip}; input text: {request.text}")
     request_time = datetime.utcnow()
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
         logger.warning(f"Unauthorized request from client IP {client_ip}")
@@ -973,11 +1049,11 @@ async def get_token_level_embeddings_matrix_and_combined_feature_vector_for_stri
     input_text_hash = sha3_256(request.text.encode('utf-8')).hexdigest()
     logger.info(f"Computed input text hash: {input_text_hash}")
     async with AsyncSessionLocal() as session:
-        logger.info(f"Querying database for existing token-level embedding bundle for input text string {request.text} and model {request.model_name}")
+        logger.info(f"Querying database for existing token-level embedding bundle for input text string {request.text} and model {request.llm_model_name}")
         result = await session.execute(
                 select(TokenLevelEmbeddingBundle)
                 .options(joinedload(TokenLevelEmbeddingBundle.token_level_embeddings)) # Eagerly load the relationship
-                .filter(TokenLevelEmbeddingBundle.input_text_hash == input_text_hash, TokenLevelEmbeddingBundle.model_name == request.model_name)
+                .filter(TokenLevelEmbeddingBundle.input_text_hash == input_text_hash, TokenLevelEmbeddingBundle.llm_model_name == request.llm_model_name)
             )
         existing_embedding_bundle = result.unique().scalar()
         if existing_embedding_bundle:
@@ -993,11 +1069,11 @@ async def get_token_level_embeddings_matrix_and_combined_feature_vector_for_stri
     try:
         embedding_bundle = TokenLevelEmbeddingBundle(
             input_text=request.text,
-            model_name=request.model_name,
+            llm_model_name=request.llm_model_name,
             ip_address=client_ip,
             request_time=request_time
         )
-        token_embeddings = await calculate_token_level_embeddings(request.text, request.model_name, client_ip, embedding_bundle.id)
+        token_embeddings = await calculate_token_level_embeddings(request.text, request.llm_model_name, client_ip, embedding_bundle.id)
         tokens = re.findall(r'\b\w+\b', request.text)
         logger.info(f"Tokenized text into {len(tokens)} tokens. Organizing results.")
         df = pd.DataFrame({
@@ -1016,7 +1092,7 @@ async def get_token_level_embeddings_matrix_and_combined_feature_vector_for_stri
             'token_level_embedding_bundle': json.loads(embedding_bundle.token_level_embeddings_bundle_json),
             'combined_feature_vector': combined_feature_vector
         }
-        logger.info(f"Done getting token-level embedding matrix and combined feature vector for input text string {request.text} and model {request.model_name}")
+        logger.info(f"Done getting token-level embedding matrix and combined feature vector for input text string {request.text} and model {request.llm_model_name}")
         json_content = embedding_bundle.token_level_embeddings_bundle_json
         json_content_length = len(json.dumps(response_content))
         overall_total_time = (datetime.utcnow() - request_time).total_seconds()
@@ -1024,17 +1100,17 @@ async def get_token_level_embeddings_matrix_and_combined_feature_vector_for_stri
             tokens = re.findall(r'\b\w+\b', request.text)
             logger.info(f"The response took {overall_total_time} seconds to generate, or {overall_total_time / (float(len(tokens))/1000.0)} seconds per thousand input tokens and {overall_total_time / (float(json_content_length)/1000000.0)} seconds per million output characters.")
         if send_back_json_or_zip_file == 'json': # Assume 'json' response should be sent back
-            logger.info(f"Now sending back JSON response for input text string {request.text} and model {request.model_name}; First 100 characters of JSON response out of {len(json_content)} total characters: {json_content[:100]}")
+            logger.info(f"Now sending back JSON response for input text string {request.text} and model {request.llm_model_name}; First 100 characters of JSON response out of {len(json_content)} total characters: {json_content[:100]}")
             return JSONResponse(content=response_content)
         else: # Assume 'zip' file should be sent back
-            output_file_name_without_extension = f"token_level_embeddings_and_combined_feature_vector_for_input_hash_{input_text_hash}_and_model_name__{request.model_name}"
+            output_file_name_without_extension = f"token_level_embeddings_and_combined_feature_vector_for_input_hash_{input_text_hash}_and_model_name__{request.llm_model_name}"
             json_file_path = f"/tmp/{output_file_name_without_extension}.json"
             with open(json_file_path, 'w') as json_file:
                 json.dump(response_content, json_file)
             zip_file_path = f"/tmp/{output_file_name_without_extension}.zip"
             with zipfile.ZipFile(zip_file_path, 'w') as zipf:
                 zipf.write(json_file_path, os.path.basename(json_file_path))
-            logger.info(f"Now sending back ZIP file response for input text string {request.text} and model {request.model_name}; First 100 characters of zipped JSON file out of {len(json_content)} total characters: {json_content[:100]}")                            
+            logger.info(f"Now sending back ZIP file response for input text string {request.text} and model {request.llm_model_name}; First 100 characters of zipped JSON file out of {len(json_content)} total characters: {json_content[:100]}")                            
             return FileResponse(zip_file_path, headers={"Content-Disposition": f"attachment; filename={output_file_name_without_extension}.zip"})
     except Exception as e:
         logger.error(f"An error occurred while processing the request: {e}")
@@ -1055,15 +1131,15 @@ async def get_token_level_embeddings_matrix_and_combined_feature_vector_for_stri
 The request must contain the following attributes:
 - `text1`: The first input text.
 - `text2`: The second input text.
-- `model_name`: The model used to calculate embeddings (optional).
+- `llm_model_name`: The model used to calculate embeddings (optional).
 - `similarity_measure`: The similarity measure to be used. It can be `cosine_similarity`, `hoeffdings_d`, or `hsic` (optional, default is `cosine_similarity`).
 
-### Example Request (note that `model_name` and `similarity_measure` are optional):
+### Example Request (note that `llm_model_name` and `similarity_measure` are optional):
 ```json
 {
   "text1": "This is a sample text.",
   "text2": "This is another sample text.",
-  "model_name": "yarn-llama-2-13b-128k",
+  "llm_model_name": "openchat_v3.2_super",
   "similarity_measure": "cosine_similarity"
 }
 ```
@@ -1091,8 +1167,8 @@ async def compute_similarity_between_strings(request: SimilarityRequest, req: Re
     try:
         client_ip = req.client.host if req else "localhost"
         logger.info("Computing similarity between strings")
-        embedding_request1 = EmbeddingRequest(text=request.text1, model_name=request.model_name)
-        embedding_request2 = EmbeddingRequest(text=request.text2, model_name=request.model_name)
+        embedding_request1 = EmbeddingRequest(text=request.text1, llm_model_name=request.llm_model_name)
+        embedding_request2 = EmbeddingRequest(text=request.text2, llm_model_name=request.llm_model_name)
         logger.info(f"Requesting embeddings for: {embedding_request1} and {embedding_request2}")
         embedding1_response = await get_or_compute_embedding(embedding_request1, client_ip=client_ip)
         embedding2_response = await get_or_compute_embedding(embedding_request2, client_ip=client_ip)
@@ -1144,14 +1220,14 @@ async def compute_similarity_between_strings(request: SimilarityRequest, req: Re
 ### Request JSON Format:
 The request must contain the following attributes:
 - `query_text`: The input text for which to find the most similar string.
-- `model_name`: The model used to calculate embeddings.
+- `llm_model_name`: The model used to calculate embeddings.
 - `number_of_most_similar_strings_to_return`: (Optional) The number of most similar strings to return, defaults to 10.
 
 ### Example:
 ```json
 {
   "query_text": "Find me the most similar string!",
-  "model_name": "yarn-llama-2-13b-128k",
+  "llm_model_name": "openchat_v3.2_super",
   "number_of_most_similar_strings_to_return": 5
 }
 ```
@@ -1175,29 +1251,29 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
     global faiss_indexes, token_faiss_indexes, associated_texts_by_model
     faiss_indexes, token_faiss_indexes, associated_texts_by_model = await build_faiss_indexes()
     request_time = datetime.utcnow()
-    model_name = request.model_name
+    llm_model_name = request.llm_model_name
     num_results = request.number_of_most_similar_strings_to_return
-    total_entries = len(associated_texts_by_model[model_name])  # Get the total number of entries for the model
+    total_entries = len(associated_texts_by_model[llm_model_name])  # Get the total number of entries for the model
     num_results = min(num_results, total_entries)  # Ensure num_results doesn't exceed the total number of entries
-    logger.info(f"Received request to find {num_results} most similar strings for query text: `{request.query_text}` using model: {model_name}")
+    logger.info(f"Received request to find {num_results} most similar strings for query text: `{request.query_text}` using model: {llm_model_name}")
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
         raise HTTPException(status_code=403, detail="Unauthorized")
     try:
         logger.info(f"Computing embedding for input text: {request.query_text}")
-        embedding_request = EmbeddingRequest(text=request.query_text, model_name=request.model_name)
+        embedding_request = EmbeddingRequest(text=request.query_text, llm_model_name=request.llm_model_name)
         embedding_response = await get_embedding_vector_for_string(embedding_request, req)
         input_embedding = np.array(embedding_response["embedding"]).astype('float32').reshape(1, -1)
         faiss.normalize_L2(input_embedding)  # Normalize the input vector for cosine similarity
         logger.info(f"Computed embedding for input text: {request.query_text}")
-        faiss_index = faiss_indexes.get(model_name)  # Retrieve the correct FAISS index for the model_name
+        faiss_index = faiss_indexes.get(llm_model_name)  # Retrieve the correct FAISS index for the llm_model_name
         if faiss_index is None:
-            raise HTTPException(status_code=400, detail=f"No FAISS index found for model: {model_name}")
+            raise HTTPException(status_code=400, detail=f"No FAISS index found for model: {llm_model_name}")
         logger.info("Searching for the most similar string in the FAISS index")
         similarities, indices = faiss_index.search(input_embedding.reshape(1, -1), num_results)  # Search for num_results similar strings
         results = []  # Create an empty list to store the results
         for ii in range(num_results):
             similarity = float(similarities[0][ii])  # Convert numpy.float32 to native float
-            most_similar_text = associated_texts_by_model[model_name][indices[0][ii]]
+            most_similar_text = associated_texts_by_model[llm_model_name][indices[0][ii]]
             if most_similar_text != request.query_text:  # Don't return the query text as a result
                 results.append({"search_result_text": most_similar_text, "similarity_to_query_text": similarity})
         response_time = datetime.utcnow()
@@ -1218,7 +1294,7 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
 
 ### Parameters:
 - `file`: The uploaded document file (either plain text or PDF).
-- `model_name`: The model used to calculate embeddings (optional).
+- `llm_model_name`: The model used to calculate embeddings (optional).
 - `json_format`: The format of the JSON response (optional, see details below).
 - `send_back_json_or_zip_file`: Whether to return a JSON file or a ZIP file containing the embeddings file (optional, defaults to `zip`).
 - `token`: Security token (optional).
@@ -1238,7 +1314,7 @@ The format of the JSON string returned by the endpoint (default is `records`; th
 - PDF: Submit a `.pdf` file (OCR not supported).""",
           response_description="Either a ZIP file containing the embeddings JSON file or a direct JSON response, depending on the value of `send_back_json_or_zip_file`.")
 async def get_all_embedding_vectors_for_document(file: UploadFile = File(...),
-                                                 model_name: str = DEFAULT_MODEL_NAME,
+                                                 llm_model_name: str = DEFAULT_MODEL_NAME,
                                                  json_format: str = 'records',
                                                  token: str = None,
                                                  send_back_json_or_zip_file: str = 'zip',
@@ -1260,7 +1336,7 @@ async def get_all_embedding_vectors_for_document(file: UploadFile = File(...),
     file_hash = hash_obj.hexdigest()
     logger.info(f"SHA3-256 hash of submitted file: {file_hash}")
     async with AsyncSessionLocal() as session: # Check if the document has been processed before
-        result = await session.execute(select(DocumentEmbedding).filter(DocumentEmbedding.file_hash == file_hash, DocumentEmbedding.model_name == model_name))
+        result = await session.execute(select(DocumentEmbedding).filter(DocumentEmbedding.file_hash == file_hash, DocumentEmbedding.llm_model_name == llm_model_name))
         existing_document_embedding = result.scalar_one_or_none()
         if existing_document_embedding: # If the document has been processed before, return the existing result
             logger.info(f"Document {file.filename} has been processed before, returning existing result")
@@ -1296,19 +1372,19 @@ async def get_all_embedding_vectors_for_document(file: UploadFile = File(...),
                 file_hash = hash_obj.hexdigest()
             else:
                 raise HTTPException(status_code=400, detail="Unsupported file type")
-            results = await compute_embeddings_for_document(strings, model_name, client_ip) # Compute the embeddings and json_content for new documents
+            results = await compute_embeddings_for_document(strings, llm_model_name, client_ip) # Compute the embeddings and json_content for new documents
             df = pd.DataFrame(results, columns=['text', 'embedding'])
             json_content = df.to_json(orient=json_format or 'records').encode()
             with open(temp_file_path, 'rb') as file_buffer: # Store the results in the database
                 original_file_content = file_buffer.read()
-            await store_document_embeddings_in_db(file, file_hash, original_file_content, json_content, results, model_name, client_ip, request_time)
+            await store_document_embeddings_in_db(file, file_hash, original_file_content, json_content, results, llm_model_name, client_ip, request_time)
     overall_total_time = (datetime.utcnow() - request_time).total_seconds()
-    logger.info(f"Done getting all embeddings for document {file.filename} containing {len(strings)} with model {model_name}")
+    logger.info(f"Done getting all embeddings for document {file.filename} containing {len(strings)} with model {llm_model_name}")
     json_content_length = len(json_content)
     if len(json_content) > 0:
         logger.info(f"The response took {overall_total_time} seconds to generate, or {overall_total_time / (len(strings)/1000.0)} seconds per thousand input tokens and {overall_total_time / (float(json_content_length)/1000000.0)} seconds per million output characters.")
     if send_back_json_or_zip_file == 'json': # Assume 'json' response should be sent back
-        logger.info(f"Returning JSON response for document {file.filename} containing {len(strings)} with model {model_name}; first 100 characters out of {json_content_length} total of JSON response: {json_content[:100]}")
+        logger.info(f"Returning JSON response for document {file.filename} containing {len(strings)} with model {llm_model_name}; first 100 characters out of {json_content_length} total of JSON response: {json_content[:100]}")
         return JSONResponse(content=json.loads(json_content.decode())) # Decode the content and parse it as JSON
     else: # Assume 'zip' file should be sent back
         original_filename_without_extension, _ = os.path.splitext(file.filename)
@@ -1318,8 +1394,89 @@ async def get_all_embedding_vectors_for_document(file: UploadFile = File(...),
         zip_file_path = f"/tmp/{original_filename_without_extension}.zip"
         with zipfile.ZipFile(zip_file_path, 'w') as zipf:
             zipf.write(json_file_path, os.path.basename(json_file_path))
-        logger.info(f"Returning ZIP response for document {file.filename} containing {len(strings)} with model {model_name}; first 100 characters out of {json_content_length} total of JSON response: {json_content[:100]}")
+        logger.info(f"Returning ZIP response for document {file.filename} containing {len(strings)} with model {llm_model_name}; first 100 characters out of {json_content_length} total of JSON response: {json_content[:100]}")
         return FileResponse(zip_file_path, headers={"Content-Disposition": f"attachment; filename={original_filename_without_extension}.zip"})
+
+
+@app.post("/get_text_completion_from_input_prompt/",
+          response_model=List[TextCompletionResponse],
+          summary="Generate Text Completion for a Given Input Prompt",
+          description="""Generate the text competion for a given input prompt string using the specified model.
+
+### Parameters:
+- `request`: A JSON object containing the input prompt string (`input_prompt`), the model name, an optional grammar file, an optional number of tokens to generate, and an optional number of completions to generate.
+- `token`: Security token (optional).
+
+### Request JSON Format:
+The request must contain the following attributes:
+- `input_prompt`: The input prompt from which to generate a completion with the LLM model.
+- `llm_model_name`: The model used to calculate the embedding (optional, will use the default model if not provided).
+- `temperature`: The temperature to use for text generation (optional, defaults to 0.7).
+- `grammar_file_string`: The grammar file used to restrict text generation (optional; default is to not use any grammar file). Examples: `json`, `list`)
+- `number_of_completions_to_generate`: The number of completions to generate (optional, defaults to 1).
+- `number_of_tokens_to_generate`: The number of tokens to generate (optional, defaults to 1000).
+
+### Example (note that `llm_model_name` is optional):
+```json
+{
+  "input_prompt": "The Kings of France in the 17th Century:",
+  "llm_model_name": "phind-codellama-34b-python-v1",
+  "temperature": 0.95,
+  "grammar_file_string": "json",
+  "number_of_tokens_to_generate": 500,
+  "number_of_completions_to_generate": 3
+}
+```
+
+### Response:
+The response will include the generated text completion, the time taken to compute the generation in seconds, and the request details (input prompt, model name, grammar file, and number of tokens to generate).
+
+### Example Response:
+```json
+[
+  {
+    "input_prompt": "The Kings of France in the 17th Century:",
+    "llm_model_name": "phind-codellama-34b-python-v1",
+    "grammar_file_string": "json",
+    "number_of_tokens_to_generate": 500,
+    "number_of_completions_to_generate": 3,
+    "time_taken_in_seconds": 67.17598033333333,
+    "generated_text": "{\"kings\":[\\n    {\\n        \"name\": \"Henry IV\",\\n        \"reign_start\": 1589,\\n        \"reign_end\": 1610\\n    },\\n    {\\n        \"name\": \"Louis XIII\",\\n        \"reign_start\": 1610,\\n        \"reign_end\": 1643\\n    },\\n    {\\n        \"name\": \"Louis XIV\",\\n        \"reign_start\": 1643,\\n        \"reign_end\": 1715\\n    },\\n    {\\n        \"name\": \"Louis XV\",\\n        \"reign_start\": 1715,\\n        \"reign_end\": 1774\\n    },\\n    {\\n        \"name\": \"Louis XVI\",\\n        \"reign_start\": 1774,\\n        \"reign_end\": 1792\\n    }\\n]}",
+    "llm_model_usage_json": "{\"prompt_tokens\": 13, \"completion_tokens\": 218, \"total_tokens\": 231}"
+  },
+  {
+    "input_prompt": "The Kings of France in the 17th Century:",
+    "llm_model_name": "phind-codellama-34b-python-v1",
+    "grammar_file_string": "json",
+    "number_of_tokens_to_generate": 500,
+    "number_of_completions_to_generate": 3,
+    "time_taken_in_seconds": 67.17598033333333,
+    "generated_text": "{\"kings\":\\n   [ {\"name\": \"Henry IV\",\\n      \"reignStart\": \"1589\",\\n      \"reignEnd\": \"1610\"},\\n     {\"name\": \"Louis XIII\",\\n      \"reignStart\": \"1610\",\\n      \"reignEnd\": \"1643\"},\\n     {\"name\": \"Louis XIV\",\\n      \"reignStart\": \"1643\",\\n      \"reignEnd\": \"1715\"}\\n   ]}",
+    "llm_model_usage_json": "{\"prompt_tokens\": 13, \"completion_tokens\": 115, \"total_tokens\": 128}"
+  },
+  {
+    "input_prompt": "The Kings of France in the 17th Century:",
+    "llm_model_name": "phind-codellama-34b-python-v1",
+    "grammar_file_string": "json",
+    "number_of_tokens_to_generate": 500,
+    "number_of_completions_to_generate": 3,
+    "time_taken_in_seconds": 67.17598033333333,
+    "generated_text": "{\\n\"Henri IV\": \"1589-1610\",\\n\"Louis XIII\": \"1610-1643\",\\n\"Louis XIV\": \"1643-1715\",\\n\"Louis XV\": \"1715-1774\",\\n\"Louis XVI\": \"1774-1792\",\\n\"Louis XVIII\": \"1814-1824\",\\n\"Charles X\": \"1824-1830\",\\n\"Louis XIX (previously known as Charles X): \" \\n    : \"1824-1830\",\\n\"Charles X (previously known as Louis XIX)\": \"1824-1830\"}",
+    "llm_model_usage_json": "{\"prompt_tokens\": 13, \"completion_tokens\": 168, \"total_tokens\": 181}"
+  }
+]
+```""", response_description="A JSON object containing the the generated text completion of the input prompt and the request details.")
+
+async def get_text_completion_from_input_prompt(request: TextCompletionRequest, req: Request = None, token: str = None, client_ip: str = None) -> List[TextCompletionResponse]:
+    if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
+        logger.warning(f"Unauthorized request from client IP {client_ip}")
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    try:
+        return await generate_completion_from_llm(request, req, client_ip)
+    except Exception as e:
+        logger.error(f"An error occurred while processing the request: {e}")
+        logger.error(traceback.format_exc()) # Print the traceback
+        raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
 @app.post("/clear_ramdisk/")
@@ -1346,9 +1503,9 @@ async def startup_event():
     elif USE_RAMDISK:
         setup_ramdisk()    
     list_of_downloaded_model_names = download_models()
-    for model_name in list_of_downloaded_model_names:
+    for llm_model_name in list_of_downloaded_model_names:
         try:
-            load_model(model_name, raise_http_exception=False)
+            load_model(llm_model_name, raise_http_exception=False)
         except FileNotFoundError as e:
             logger.error(e)
     faiss_indexes, token_faiss_indexes, associated_texts_by_model = await build_faiss_indexes()
