@@ -10,6 +10,8 @@ You can also submit a plaintext file or PDF file (not requiring OCR) and get bac
 
 In addition to fixed-sized embedding vectors, we also expose functionality that allows you to get back token-level embeddings, where each token in the input stream is embedded with its context in the string as a full sized vector, thus producing a matrix that has a number of rows equal to the number of tokens in the input string. This includes far more nuanced information about the contents of the string at the expense of much greater compute and storage requirements. The other drawback is that, instead of having the same sized output for every string, regardless of length (which makes it very easy to compare unequal length strings using cosine similarity and other measures), the token-level embedding matrix obviously differs in dimensions for two different strings if the strings have different numbers of tokens. To deal with this, we introduce combined feature vectors, which compute the column-wise mean, min, max, and std. deviation of the token-level emeddding matrix, and concatenate these together in to a single huge matrix; this allows you to compare strings of different lengths while still capturing more nuance. The combined results, including the embedding matrix and associated combined feature vector, can similarly be returned as either a zip file or direct JSON response.
 
+Finally, we add a new endpoint for generating multiple text completions for a given input prompt, with the ability to specify a grammar file that will enforce a particular form of response, such as JSON.
+
 ## Screenshot
 ![Llama2 FastAPI Service Swagger UI](https://github.com/Dicklesworthstone/llama_embeddings_fastapi_service/raw/main/Llama2-FastAPI-Service-%20Swagger%20Screenshot.png)
 
@@ -44,6 +46,7 @@ Watch the the automated setup process in action [here](https://asciinema.org/a/6
 10. **Flexible Configurations**: Offers configurable settings through environment variables and input parameters, including response formats like JSON or ZIP files.
 11. **Comprehensive Logging**: Captures essential information with detailed logs, without overwhelming storage or readability.
 12. **Support for Multiple Models and Measures**: Accommodates multiple embedding models and similarity measures, allowing flexibility and customization based on user needs.
+13. **Ability to Generate Multiple Completions using Specified Grammar**: Get back structured LLM completions for a specified input prompt.
 
 ## Demo Screen Recording in Action
 [Here](https://asciinema.org/a/39dZ8vv9nkcNygasUl35wnBPq) is the live console output while I interact with it from the Swagger page to make requests.
@@ -96,7 +99,7 @@ You can configure the service easily by editing the included `.env` file. Here's
 - `USE_SECURITY_TOKEN`: Whether to use a hardcoded security token. (e.g., `True`)
 - `USE_PARALLEL_INFERENCE_QUEUE`: Use parallel processing. (e.g., `True`)
 - `MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS`: Maximum number of parallel inference tasks. (e.g., `30`)
-- `DEFAULT_MODEL_NAME`: Default model name to use. (e.g., `llama2_7b_chat_uncensored`)
+- `DEFAULT_MODEL_NAME`: Default model name to use. (e.g., `yarn-llama-2-13b-128k`)
 - `LLM_CONTEXT_SIZE_IN_TOKENS`: Context size in tokens for LLM. (e.g., `512`)
 - `LLAMA_EMBEDDING_SERVER_LISTEN_PORT`: Port number for the service. (e.g., `8089`)
 - `MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING`: Minimum string length for document embedding. (e.g., `15`)
@@ -157,6 +160,7 @@ The following endpoints are available:
 - **POST `/compute_similarity_between_strings/`**: Compute Similarity Between Two Strings. Compute the similarity between two given input strings using specified model embeddings and a selected similarity measure.
 - **POST `/search_stored_embeddings_with_query_string_for_semantic_similarity/`**: Get Most Similar Strings from Stored Embeddings in Database. Find the most similar strings in the database to the given input "query" text.
 - **POST `/get_all_embedding_vectors_for_document/`**: Get Embeddings for a Document. Extract text embeddings for a document, supporting both plain text and PDF files (PDFs requiring OCR are not supported).
+- **POST `/get_text_completions_from_input_prompt/`**: Get back multiple completions from the specified LLM model, with the ability to specify a grammar file which will enforce a particular format of the response, such as JSON. 
 - **POST `/clear_ramdisk/`**: Clear Ramdisk Endpoint. Clears the RAM Disk if it is enabled.
 
 For detailed request and response schemas, please refer to the Swagger UI available at the root URL or the section at the end of this `README`.
@@ -508,5 +512,37 @@ Retrieve the token-level embeddings and combined feature vector for a given inpu
 - `client_ip`: Client IP address (optional).
 - `json_format`: Format for JSON response of token-level embeddings (optional).
 - `send_back_json_or_zip_file`: Whether to return a JSON response or a ZIP file containing the JSON file (optional, defaults to `zip`).
+
+### 10. `/get_text_completions_from_input_prompt/` (POST)
+
+#### Purpose
+Generate text completions for a given input prompt using the specified model.
+
+#### Parameters
+- `request`: A JSON object containing various options like `input_prompt`, `llm_model_name`, etc.
+- `token`: Security token (optional).
+- `req`: HTTP request object (optional).
+- `client_ip`: Client IP address (optional).
+
+#### Request JSON Format
+The JSON object should have the following keys:
+- `input_prompt`
+- `llm_model_name`
+- `temperature`
+- `grammar_file_string`
+- `number_of_completions_to_generate`
+- `number_of_tokens_to_generate`
+
+#### Example Request
+```json
+{
+  "input_prompt": "The Kings of France in the 17th Century:",
+  "llm_model_name": "phind-codellama-34b-python-v1",
+  "temperature": 0.95,
+  "grammar_file_string": "json",
+  "number_of_tokens_to_generate": 500,
+  "number_of_completions_to_generate": 3
+}
+
 
 
