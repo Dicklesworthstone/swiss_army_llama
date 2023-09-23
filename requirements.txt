@@ -11,10 +11,11 @@ PyPDF2
 python-multipart
 python-magic
 langchain
-scikit-learn
 llama-cpp-python
 httpx
-numba
-scipy
-hyppo
 filelock
+fast_vector_similarity
+pandas
+faster-whisper
+textract
+pytz
