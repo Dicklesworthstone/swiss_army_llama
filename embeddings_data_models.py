@@ -2,11 +2,11 @@ from sqlalchemy import Column, String, Float, DateTime, Integer, UniqueConstrain
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import declarative_base, relationship, validates
 from hashlib import sha3_256
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, field_validator
+from typing import List, Optional, Union, Dict
 from decouple import config
 from sqlalchemy import event
-from hashlib import sha256
+from datetime import datetime
 
 Base = declarative_base()
 DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="llama2_7b_chat_uncensored", cast=str) 
@@ -25,7 +25,7 @@ class TextEmbedding(Base):
     request_time = Column(DateTime)
     response_time = Column(DateTime)
     total_time = Column(Float)
-    document_id = Column(Integer, ForeignKey('document_embeddings.id'))
+    document_file_hash = Column(String, ForeignKey('document_embeddings.file_hash'))
     document = relationship("DocumentEmbedding", back_populates="embeddings")
     __table_args__ = (UniqueConstraint('text_hash', 'llm_model_name', name='_text_hash_model_uc'),)
     @validates('text')
@@ -37,7 +37,7 @@ class TextEmbedding(Base):
 class DocumentEmbedding(Base):
     __tablename__ = "document_embeddings"
     id = Column(Integer, primary_key=True, index=True)
-    document_id = Column(Integer, ForeignKey('documents.id'))
+    document_hash = Column(String, ForeignKey('documents.document_hash'))
     filename = Column(String)
     mimetype = Column(String)
     file_hash = Column(String, index=True)
@@ -61,7 +61,7 @@ class Document(Base):
     document_embeddings = relationship("DocumentEmbedding", back_populates="document")
     def update_hash(self): # Concatenate specific attributes from the document_embeddings relationship
         hash_data = "".join([emb.filename + emb.mimetype for emb in self.document_embeddings])
-        self.document_hash = sha256(hash_data.encode('utf-8')).hexdigest()
+        self.document_hash = sha3_256(hash_data.encode('utf-8')).hexdigest()
 
 @event.listens_for(Document.document_embeddings, 'append')
 def update_document_hash_on_append(target, value, initiator):
@@ -136,7 +136,13 @@ class SimilarityRequest(BaseModel):
     text1: str
     text2: str
     llm_model_name: Optional[str] = DEFAULT_MODEL_NAME
-    similarity_measure: Optional[str] = "hoeffdings_d" # Default to hoeffdings_d; can also be "cosine_similarity" or "hsic"
+    similarity_measure: Optional[str] = "all"
+    @field_validator('similarity_measure')
+    def validate_similarity_measure(cls, value):
+        valid_measures = ["all", "spearman_rho", "kendall_tau", "approximate_distance_correlation", "jensen_shannon_similarity", "hoeffding_d"]
+        if value.lower() not in valid_measures:
+            raise ValueError(f"Invalid similarity measure. Supported measures are: {', '.join(valid_measures)}")
+        return value.lower()
     
 class SemanticSearchRequest(BaseModel):
     query_text: str
@@ -147,6 +153,17 @@ class SemanticSearchResponse(BaseModel):
     query_text: str
     results: List[dict]  # List of similar strings and their similarity scores using cosine similarity with Faiss (in descending order)
 
+class AdvancedSemanticSearchRequest(BaseModel):
+    query_text: str
+    llm_model_name: str = DEFAULT_MODEL_NAME
+    similarity_filter_percentage: float = 0.98
+    number_of_most_similar_strings_to_return: Optional[int] = None
+
+class AdvancedSemanticSearchResponse(BaseModel):
+    query_text: str
+    results: List[Dict[str, Union[str, float, Dict[str, float]]]]
+
+
 class EmbeddingResponse(BaseModel):
     embedding: List[float]
 
@@ -154,7 +171,7 @@ class SimilarityResponse(BaseModel):
     text1: str
     text2: str
     similarity_measure: str
-    similarity_score: float
+    similarity_score: Union[float, Dict[str, float]]  # Now can be either a float or a dictionary
     embedding1: List[float]
     embedding2: List[float]
         
@@ -181,3 +198,35 @@ class TextCompletionResponse(BaseModel):
     time_taken_in_seconds: float
     generated_text: str
     llm_model_usage_json: str
+
+class AudioTranscript(Base):
+    __tablename__ = "audio_transcripts"
+    audio_file_hash = Column(String, primary_key=True, index=True)
+    audio_file_name = Column(String, index=True)
+    audio_file_size_mb = Column(Float)  # File size in MB
+    segments_json = Column(JSON)  # Transcribed segments as JSON
+    combined_transcript_text = Column(String)
+    combined_transcript_text_list_of_metadata_dicts = Column(JSON)
+    info_json = Column(JSON)  # Transcription info as JSON
+    ip_address = Column(String)
+    request_time = Column(DateTime)
+    response_time = Column(DateTime)
+    total_time = Column(Float)
+
+class AudioTranscriptResponse(BaseModel):
+    audio_file_hash: str
+    audio_file_name: str
+    audio_file_size_mb: float
+    segments_json: List[dict]
+    combined_transcript_text: str
+    combined_transcript_text_list_of_metadata_dicts: List[dict]
+    info_json: dict
+    url_to_download_zip_file_of_embeddings: str
+    ip_address: str
+    request_time: datetime
+    response_time: datetime
+    total_time: float
+
+class ShowLogsIncrementalModel(BaseModel):
+    logs: str
+    last_position: int
