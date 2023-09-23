@@ -1,7 +1,5 @@
-# Use Ubuntu latest image
-ARG BASE_IMAGE
-ARG ARCH
-FROM --platform=linux/$ARCH $BASE_IMAGE
+# Use Python 3.9 image
+FROM python:3.9-buster
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
@@ -11,22 +9,25 @@ WORKDIR /app
 
 # Install system dependencies, including sudo
 RUN apt-get update && apt-get install -y \
-    apt-utils \
     build-essential \
     libpq-dev \
     libmagic1 \
+    libxml2-dev \
+    libxslt1-dev \
+    antiword \
+    unrtf \
+    poppler-utils \
+    pstotext \
+    tesseract-ocr \
+    flac \
+    ffmpeg \
+    lame \
+    libmad0 \
+    libsox-fmt-mp3 \
+    sox \
+    libjpeg-dev swig \
     sudo && \
     rm -rf /var/lib/apt/lists/*
-
-# Install CMake from the Ubuntu repositories
-RUN apt-get update && \
-    apt-get install -y cmake
-
-# Confirm the installed CMake version
-RUN cmake --version
-
-RUN apt-get update && \
-    apt-get install -y python3 python3-pip python-is-python3
 
 # Upgrade pip and install wheel
 RUN python3 -m pip install --upgrade pip && \
