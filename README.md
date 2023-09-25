@@ -6,7 +6,7 @@ The Llama2 Embedding Server is designed to facilitate and optimize the process o
 
 Some additional useful endpoints are provided, such as computing semantic similarity between submitted text strings (using various measures of similarity, such as cosine similarity, but also more esoteric measures like [Hoeffding's D](https://blogs.sas.com/content/iml/2021/05/03/examples-hoeffding-d.html) and [HSIC](https://www.sciencedirect.com/science/article/abs/pii/S0950705121008297), and semantic search across all your cached embeddings using FAISS vector searching. 
 
-You can also submit a plaintext file or PDF file (not requiring OCR) and get back a zip file containing all of the embeddings for each sentence as JSON, organized in various ways such `records`, `table`, etc. (i.e., all the export options from the Pandas `to_json()` function). The results of getting the embeddings for all sentences in a document can be returned either as a zip file containing a JSON file (so it won't crash Swagger among other things), or as a direct JSON response if you're using curl or similar.
+You can now submit not only plaintext and fully digital PDFs but also MS Word documents, images, and other file types supported by the textract library. The library can automatically apply OCR using Tesseract for scanned text. The returned embeddings for each sentence in a document can be organized in various formats like records, table, etc., using the Pandas to_json() function. The results can be returned either as a ZIP file containing a JSON file or as a direct JSON response.
 
 In addition to fixed-sized embedding vectors, we also expose functionality that allows you to get back token-level embeddings, where each token in the input stream is embedded with its context in the string as a full sized vector, thus producing a matrix that has a number of rows equal to the number of tokens in the input string. This includes far more nuanced information about the contents of the string at the expense of much greater compute and storage requirements. The other drawback is that, instead of having the same sized output for every string, regardless of length (which makes it very easy to compare unequal length strings using cosine similarity and other measures), the token-level embedding matrix obviously differs in dimensions for two different strings if the strings have different numbers of tokens. To deal with this, we introduce combined feature vectors, which compute the column-wise mean, min, max, and std. deviation of the token-level emeddding matrix, and concatenate these together in to a single huge matrix; this allows you to compare strings of different lengths while still capturing more nuance. The combined results, including the embedding matrix and associated combined feature vector, can similarly be returned as either a zip file or direct JSON response.
 
@@ -37,16 +37,17 @@ Watch the the automated setup process in action [here](https://asciinema.org/a/6
 1. **Text Embedding Computation**: Utilizes pre-trained LLama2 and other LLMs via llama_cpp and langchain to generate embeddings for any provided text, including token-level embeddings that capture more nuanced information about the content.
 2. **Embedding Caching**: Efficiently stores and retrieves computed embeddings in SQLite, minimizing redundant computations. It supports caching both fixed-sized embedding vectors and token-level embeddings.
 3. **Advanced Similarity Measurements and Retrieval**: Offers various measures of similarity like cosine similarity, Hoeffding's D, HSIC, and semantic search across cached embeddings using FAISS vector searching.
-4. **File Processing for Documents**: Submit plaintext files or PDFs (not requiring OCR) to get back a ZIP file or JSON response containing embeddings for each sentence, organized in various ways like `records`, `table`, etc., using Pandas `to_json()` function.
-5. **Token-Level Embeddings and Combined Feature Vectors**: Provides token-level embeddings to capture the context of each token in the input string. Introduces combined feature vectors by computing the column-wise mean, min, max, and std. deviation of the token-level embedding matrix, allowing comparison of unequal length strings.
-6. **RAM Disk Usage**: Optionally uses RAM Disk to store models for faster access and execution. Automatically handles the creation and management of RAM Disks.
-7. **Robust Exception Handling**: Features comprehensive exception management to ensure system resilience.
-8. **Interactive API Documentation**: Integrates with Swagger UI for an interactive and user-friendly experience, accommodating large result sets without crashing.
-9. **Scalability and Concurrency**: Built on the FastAPI framework, handles concurrent requests and supports parallel inference with configurable concurrency levels.
-10. **Flexible Configurations**: Offers configurable settings through environment variables and input parameters, including response formats like JSON or ZIP files.
-11. **Comprehensive Logging**: Captures essential information with detailed logs, without overwhelming storage or readability.
-12. **Support for Multiple Models and Measures**: Accommodates multiple embedding models and similarity measures, allowing flexibility and customization based on user needs.
-13. **Ability to Generate Multiple Completions using Specified Grammar**: Get back structured LLM completions for a specified input prompt.
+4. **File Processing for Documents**: The library now accepts a broader range of file types including plaintext, PDFs, MS Word documents, and images. It can also handle OCR automatically. Returned embeddings for each sentence are organized in various formats like records, table, etc., using Pandas to_json() function.
+5. **Advanced Text Preprocessing**: The library now employs a more advanced sentence splitter to segment text into meaningful sentences. It handles cases where periods are used in abbreviations, domain names, or numbers and also ensures complete sentences even when quotes are used. It also takes care of pagination issues commonly found in scanned documents, such as awkward newlines and hyphenated line breaks.
+6. **Token-Level Embeddings and Combined Feature Vectors**: Provides token-level embeddings to capture the context of each token in the input string. Introduces combined feature vectors by computing the column-wise mean, min, max, and std. deviation of the token-level embedding matrix, allowing comparison of unequal length strings.
+7. **RAM Disk Usage**: Optionally uses RAM Disk to store models for faster access and execution. Automatically handles the creation and management of RAM Disks.
+8. **Robust Exception Handling**: Features comprehensive exception management to ensure system resilience.
+9. **Interactive API Documentation**: Integrates with Swagger UI for an interactive and user-friendly experience, accommodating large result sets without crashing.
+10. **Scalability and Concurrency**: Built on the FastAPI framework, handles concurrent requests and supports parallel inference with configurable concurrency levels.
+11. **Flexible Configurations**: Offers configurable settings through environment variables and input parameters, including response formats like JSON or ZIP files.
+12. **Comprehensive Logging**: Captures essential information with detailed logs, without overwhelming storage or readability.
+13. **Support for Multiple Models and Measures**: Accommodates multiple embedding models and similarity measures, allowing flexibility and customization based on user needs.
+14. **Ability to Generate Multiple Completions using Specified Grammar**: Get back structured LLM completions for a specified input prompt.
 
 ## Demo Screen Recording in Action
 [Here](https://asciinema.org/a/39dZ8vv9nkcNygasUl35wnBPq) is the live console output while I interact with it from the Swagger page to make requests.
@@ -159,7 +160,7 @@ The following endpoints are available:
 - **POST `/get_token_level_embeddings_matrix_and_combined_feature_vector_for_string/`**: Retrieve Token-Level Embeddings and Combined Feature Vector for a Given Input String. Retrieve the token-level embeddings and combined feature vector for a given input text using the specified model.
 - **POST `/compute_similarity_between_strings/`**: Compute Similarity Between Two Strings. Compute the similarity between two given input strings using specified model embeddings and a selected similarity measure.
 - **POST `/search_stored_embeddings_with_query_string_for_semantic_similarity/`**: Get Most Similar Strings from Stored Embeddings in Database. Find the most similar strings in the database to the given input "query" text.
-- **POST `/get_all_embedding_vectors_for_document/`**: Get Embeddings for a Document. Extract text embeddings for a document, supporting both plain text and PDF files (PDFs requiring OCR are not supported).
+- **POST `/get_all_embedding_vectors_for_document/`**: Get Embeddings for a Document. Extract text embeddings for a document. This endpoint supports plain text, .doc/.docx (MS Word), PDF files, images (using Tesseract OCR), and many other file types supported by the textract library.
 - **POST `/get_text_completions_from_input_prompt/`**: Get back multiple completions from the specified LLM model, with the ability to specify a grammar file which will enforce a particular format of the response, such as JSON. 
 - **POST `/clear_ramdisk/`**: Clear Ramdisk Endpoint. Clears the RAM Disk if it is enabled.
 
@@ -457,11 +458,11 @@ Find the most similar strings in the database to the given input "query" text. T
 ### 4. `/get_all_embedding_vectors_for_document/` (POST)
 
 #### Purpose
-Extract text embeddings for a document. This endpoint supports both plain text and PDF files. OCR is not supported.
+Extract text embeddings for a document. The library now supports a wide range of file types including plain text, .doc/.docx, PDF files, images (using Tesseract OCR), and many other types supported by the `textract` library.
 
 #### Parameters
-- `file`: The uploaded document file (either plain text or PDF).
-- `model_name`: (Optional) The model used to calculate embeddings.
+- `file`: The uploaded document file (either plain text, .doc/.docx, PDF, etc.).
+- `llm_model_name`: (Optional) The model used to calculate embeddings.
 - `json_format`: (Optional) The format of the JSON response.
 - `send_back_json_or_zip_file`: Whether to return a JSON file or a ZIP file containing the embeddings file (optional, defaults to `zip`).
 - `token`: Security token (optional).
