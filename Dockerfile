@@ -17,7 +17,6 @@ RUN apt-get update && apt-get install -y \
     antiword \
     unrtf \
     poppler-utils \
-    pstotext \
     tesseract-ocr \
     flac \
     ffmpeg \
