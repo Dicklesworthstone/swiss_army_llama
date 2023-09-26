@@ -107,7 +107,10 @@ text_completion_model_cache = {} # Model cache to store loaded text completion m
 logger.info(f"USE_RAMDISK is set to: {USE_RAMDISK}")
 db_writer = None
 
-app = FastAPI(docs_url="/")  # Set the Swagger UI to root
+description_string = """
+🇨🇭🎖️🦙 Swiss Army Llama is your One-Stop-Shop to Quickly and Conveniently Integrate Powerful Local LLM Functionality into your Project via a REST API.
+"""
+app = FastAPI(title="Swiss Army Llama", description=description_string, docs_url="/")  # Set the Swagger UI to root
 engine = create_async_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
 AsyncSessionLocal = sessionmaker(
     bind=engine,
