@@ -24,13 +24,6 @@ sudo usermod -aG docker $USER
 echo "Removing old swiss_army_llama directory..."
 rm -rf swiss_army_llama
 
-# Clone the repository
-echo "Cloning the swiss_army_llama repository..."
-git clone https://github.com/Dicklesworthstone/swiss_army_llama
-
-# Change to the repository directory
-cd swiss_army_llama
-
 # Build the Docker image
 echo "Building the Docker image..."
 arch=$(uname -m)
