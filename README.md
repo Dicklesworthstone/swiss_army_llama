@@ -59,7 +59,17 @@ Watch the the automated setup process in action [here](https://asciinema.org/a/6
 ---
 
 ## Requirements:
+
+System requirements for running the application (to support all the file types handled by textract):
+
+```bash
+sudo apt-get update
+sudo apt-get install libxml2-dev libxslt1-dev antiword unrtf poppler-utils pstotext tesseract-ocr flac ffmpeg lame libmad0 libsox-fmt-mp3 sox libjpeg-dev swig -y
 ```
+
+Python Requirements:
+
+```bash
 fastapi
 pydantic
 uvicorn
