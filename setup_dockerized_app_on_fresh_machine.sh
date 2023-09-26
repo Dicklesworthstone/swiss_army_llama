@@ -20,10 +20,6 @@ sudo docker --version
 echo "Adding current user to the Docker group..."
 sudo usermod -aG docker $USER
 
-# Remove the old directory if it exists
-echo "Removing old swiss_army_llama directory..."
-rm -rf swiss_army_llama
-
 # Build the Docker image
 echo "Building the Docker image..."
 arch=$(uname -m)
