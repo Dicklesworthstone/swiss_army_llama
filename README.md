@@ -4,7 +4,7 @@
 
 The Llama2 Embedding Server is designed to facilitate and optimize the process of obtaining text embeddings using different LLMs via llama_cpp and langchain. To avoid wasting computation, these embeddings are cached in SQlite and retrieved if they have already been computed before. To speed up the process of loading multiple LLMs, optional RAM Disks can be used, and the process for creating and managing them is handled automatically for you. 
 
-Some additional useful endpoints are provided, such as computing semantic similarity between submitted text strings (using various measures of similarity, such as cosine similarity, but also more esoteric measures like [Hoeffding's D](https://blogs.sas.com/content/iml/2021/05/03/examples-hoeffding-d.html) and [HSIC](https://www.sciencedirect.com/science/article/abs/pii/S0950705121008297), and semantic search across all your cached embeddings using FAISS vector searching. 
+Some additional useful endpoints are provided, such as computing semantic similarity between submitted text strings. The service leverages a high-performance Rust-based library, `fast_vector_similarity`, to offer a range of similarity measures including `spearman_rho`, `kendall_tau`, `approximate_distance_correlation`, `jensen_shannon_similarity`, and [`hoeffding_d`](https://blogs.sas.com/content/iml/2021/05/03/examples-hoeffding-d.html). Additionally, semantic search across all your cached embeddings is supported using FAISS vector searching. You can either use the built in cosine similarity from FAISS, or supplement this with a second pass that computes the more sophisticated similarity measures for the most relevant subset of the stored vectors found using cosine similarity.
 
 You can now submit not only plaintext and fully digital PDFs but also MS Word documents, images, and other file types supported by the textract library. The library can automatically apply OCR using Tesseract for scanned text. The returned embeddings for each sentence in a document can be organized in various formats like records, table, etc., using the Pandas to_json() function. The results can be returned either as a ZIP file containing a JSON file or as a direct JSON response. You can now also submit audio files in MP3 or WAV formats. The library uses OpenAI's Whisper model, as optimized by the Faster Whisper Python library, to transcribe the audio into text. Optionally, this transcript can be treated like any other document, with each sentence's embeddings computed and stored. The results are returned as a URL to a downloadable ZIP file containing a JSON with the embedding vector data.
 
@@ -37,7 +37,7 @@ Watch the the automated setup process in action [here](https://asciinema.org/a/6
 
 1. **Text Embedding Computation**: Utilizes pre-trained LLama2 and other LLMs via llama_cpp and langchain to generate embeddings for any provided text, including token-level embeddings that capture more nuanced information about the content.
 2. **Embedding Caching**: Efficiently stores and retrieves computed embeddings in SQLite, minimizing redundant computations. It supports caching both fixed-sized embedding vectors and token-level embeddings.
-3. **Advanced Similarity Measurements and Retrieval**: Offers various measures of similarity like cosine similarity, Hoeffding's D, HSIC, and semantic search across cached embeddings using FAISS vector searching.
+3. **Advanced Similarity Measurements and Retrieval**: Utilizes the author's own `fast_vector_similarity` library written in Rust to offer highly optimized advanced similarity measures such as `spearman_rho`, `kendall_tau`, `approximate_distance_correlation`, `jensen_shannon_similarity`, and `hoeffding_d`. Semantic search across cached embeddings is also supported using FAISS vector searching.
 4. **File Processing for Documents**: The library now accepts a broader range of file types including plaintext, PDFs, MS Word documents, and images. It can also handle OCR automatically. Returned embeddings for each sentence are organized in various formats like records, table, etc., using Pandas to_json() function.
 5. **Advanced Text Preprocessing**: The library now employs a more advanced sentence splitter to segment text into meaningful sentences. It handles cases where periods are used in abbreviations, domain names, or numbers and also ensures complete sentences even when quotes are used. It also takes care of pagination issues commonly found in scanned documents, such as awkward newlines and hyphenated line breaks.
 6. **Audio Transcription and Embedding**: Upload an audio file in MP3 or WAV format. The library uses OpenAI's Whisper model for transcription. Optionally, sentence embeddings can be computed for the transcript.
@@ -163,7 +163,7 @@ The following endpoints are available:
 - **GET `/show_logs/`**:  Shows logs for the last 5 minutes by default. Can also provide a parameter like this: `/show_logs/{minutes}` to get the last N minutes of log data.
 - **POST `/get_embedding_vector_for_string/`**: Retrieve Embedding Vector for a Given Text String. Retrieves the embedding vector for a given input text string using the specified model.
 - **POST `/get_token_level_embeddings_matrix_and_combined_feature_vector_for_string/`**: Retrieve Token-Level Embeddings and Combined Feature Vector for a Given Input String. Retrieve the token-level embeddings and combined feature vector for a given input text using the specified model.
-- **POST `/compute_similarity_between_strings/`**: Compute Similarity Between Two Strings. Compute the similarity between two given input strings using specified model embeddings and a selected similarity measure.
+- **POST `/compute_similarity_between_strings/`**: Compute Similarity Between Two Strings. Leverages the `fast_vector_similarity` library to compute the similarity between two given input strings using specified model embeddings and a selected similarity measure.
 - **POST `/search_stored_embeddings_with_query_string_for_semantic_similarity/`**: Get Most Similar Strings from Stored Embeddings in Database. Find the most similar strings in the database to the given input "query" text.
 - **POST `/get_all_embedding_vectors_for_document/`**: Get Embeddings for a Document. Extract text embeddings for a document. This endpoint supports plain text, .doc/.docx (MS Word), PDF files, images (using Tesseract OCR), and many other file types supported by the textract library.
 - **POST `/compute_transcript_with_whisper_from_audio/`**: Transcribe and Embed Audio using Whisper and LLM. This endpoint accepts an audio file and optionally computes document embeddings. The transcription and embeddings are stored, and a ZIP file containing the embeddings can be downloaded.
@@ -440,9 +440,8 @@ Compute the similarity between two given input strings using specified model emb
 #### Parameters
 - `text1`: The first input text.
 - `text2`: The second input text.
-- `model_name`: The model used to calculate embeddings (optional).
-- `similarity_measure`: The similarity measure to be used. It can be `cosine_similarity`, `hoeffdings_d`, or `hsic` (optional, default is `cosine_similarity`).
-- `token`: Security token (optional).
+- `llm_model_name`: The model used to calculate embeddings (optional).
+- `similarity_measure`: The similarity measure to be used. Supported measures include `all`, `spearman_rho`, `kendall_tau`, `approximate_distance_correlation`, `jensen_shannon_similarity`, and `hoeffding_d` (optional, default is `all`).
 
 #### Workflow
 1. **Retrieve Embeddings**: The embeddings for `text1` and `text2` are retrieved or computed using the specified or default model.
