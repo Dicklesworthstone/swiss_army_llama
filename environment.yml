@@ -1,4 +1,4 @@
-name: llama_embeddings_fastapi_service_environment
+name: swiss_army_llama_service_environment
 channels:
   - conda-forge
   - defaults

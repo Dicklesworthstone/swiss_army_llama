@@ -52,4 +52,4 @@ COPY . .
 EXPOSE 8089
 
 # Command to run the application
-CMD ["python3", "llama_2_embeddings_fastapi_server.py"]
+CMD ["python3", "swiss_army_llama.py"]

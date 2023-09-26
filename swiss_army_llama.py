@@ -28,8 +28,8 @@ import numpy as np
 from decouple import config
 import uvicorn
 import psutil
-import fastapi
 import textract
+import fastapi
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Depends
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, Response
 from fastapi.concurrency import run_in_threadpool
@@ -58,7 +58,7 @@ if not os.path.exists(old_logs_dir):
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-log_file_path = 'llama2_embeddings_fastapi_service.log'
+log_file_path = 'swiss_army_llama.log'
 fh = RotatingFileHandler(log_file_path, maxBytes=10*1024*1024, backupCount=5)
 fh.setFormatter(formatter)
 logger.addHandler(fh)
@@ -82,8 +82,8 @@ if use_hardcoded_security_token:
     USE_SECURITY_TOKEN = config("USE_SECURITY_TOKEN", default=False, cast=bool)
 else:
     USE_SECURITY_TOKEN = False
-DATABASE_URL = "sqlite+aiosqlite:///embeddings.sqlite"
-LLAMA_EMBEDDING_SERVER_LISTEN_PORT = config("LLAMA_EMBEDDING_SERVER_LISTEN_PORT", default=8089, cast=int)
+DATABASE_URL = "sqlite+aiosqlite:///swiss_army_llama.sqlite"
+SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT = config("SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT", default=8089, cast=int)
 DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="openchat_v3.2_super", cast=str) 
 LLM_CONTEXT_SIZE_IN_TOKENS = config("LLM_CONTEXT_SIZE_IN_TOKENS", default=512, cast=int)
 TEXT_COMPLETION_CONTEXT_SIZE_IN_TOKENS = config("TEXT_COMPLETION_CONTEXT_SIZE_IN_TOKENS", default=4000, cast=int)
@@ -1125,7 +1125,7 @@ The response will include a JSON object containing the list of available model n
 ### Example Response:
 ```json
 {
-  "model_names": ["yarn-llama-2-7b-128k", "yarn-llama-2-13b-128k", "openchat_v3.2_super", "phind-codellama-34b-python-v1", "my_super_custom_model"]
+    "model_names": ["yarn-llama-2-7b-128k", "yarn-llama-2-13b-128k", "openchat_v3.2_super", "phind-codellama-34b-python-v1", "my_super_custom_model"]
 }
 ```""",
         response_description="A JSON object containing the list of available model names.")
@@ -1154,7 +1154,7 @@ The response will include a JSON object containing the list of all stored string
 ### Example Response:
 ```json
 {
-  "strings": ["The quick brown fox jumps over the lazy dog", "To be or not to be", "Hello, World!"]
+    "strings": ["The quick brown fox jumps over the lazy dog", "To be or not to be", "Hello, World!"]
 }
 ```""",
         response_description="A JSON object containing the list of all strings with computed embeddings.")
@@ -1190,7 +1190,7 @@ The response will include a JSON object containing the list of all stored docume
 ### Example Response:
 ```json
 {
-  "documents": ["document1.pdf", "document2.txt", "document3.md", "document4.json"]
+    "documents": ["document1.pdf", "document2.txt", "document3.md", "document4.json"]
 }
 ```""",
         response_description="A JSON object containing the list of all documents with computed embeddings.")
@@ -1231,8 +1231,8 @@ The request must contain the following attributes:
 ### Example (note that `llm_model_name` is optional):
 ```json
 {
-  "text": "This is a sample text.",
-  "llm_model_name": "openchat_v3.2_super"
+    "text": "This is a sample text.",
+    "llm_model_name": "openchat_v3.2_super"
 }
 ```
 
@@ -1242,7 +1242,7 @@ The response will include the embedding vector for the input text string.
 ### Example Response:
 ```json
 {
-  "embedding": [0.1234, 0.5678, ...]
+    "embedding": [0.1234, 0.5678, ...]
 }
 ```""", response_description="A JSON object containing the embedding vector for the input text.")
 async def get_embedding_vector_for_string(request: EmbeddingRequest, req: Request = None, token: str = None, client_ip: str = None, document_file_hash: str = None) -> EmbeddingResponse:
@@ -1278,8 +1278,8 @@ The request must contain the following attributes:
 ### Example Request:
 ```json
 {
-  "text": "This is a sample text.",
-  "llm_model_name": "openchat_v3.2_super"
+    "text": "This is a sample text.",
+    "llm_model_name": "openchat_v3.2_super"
 }
 ```
 
@@ -1294,7 +1294,7 @@ The response will also include a combined feature vector derived from the the to
 for all input texts, regardless of length (whereas the token-level embeddings matrix will have a different number of rows for each input text, depending on the number of tokens in the text).
 The combined feature vector is obtained by calculating the column-wise means, mins, maxes, and standard deviations of the token-level embeddings matrix; thus if the token-level embedding vectors
 are of length `n`, the combined feature vector will be of length `4n`.
- 
+
 - `input_text`: The original input text.
 - `token_level_embedding_bundle`: Either a ZIP file containing the JSON file, or a direct JSON array containing the token-level embeddings and combined feature vector for the input text, depending on the value of `send_back_json_or_zip_file`.
 - `combined_feature_vector`: A list containing the combined feature vector, obtained by calculating the column-wise means, mins, maxes, and standard deviations of the token-level embeddings. This vector is always of length `4n`, where `n` is the length of the token-level embedding vectors.
@@ -1302,13 +1302,13 @@ are of length `n`, the combined feature vector will be of length `4n`.
 ### Example Response:
 ```json
 {
-  "input_text": "This is a sample text.",
-  "token_level_embedding_bundle": [
-    {"token": "This", "embedding": [0.1234, 0.5678, ...]},
-    {"token": "is", "embedding": [...]},
-    ...
-  ],
-  "combined_feature_vector": [0.5678, 0.1234, ...]
+    "input_text": "This is a sample text.",
+    "token_level_embedding_bundle": [
+        {"token": "This", "embedding": [0.1234, 0.5678, ...]},
+        {"token": "is", "embedding": [...]},
+        ...
+    ],
+    "combined_feature_vector": [0.5678, 0.1234, ...]
 }
 ```
 """,
@@ -1418,10 +1418,10 @@ The request must contain the following attributes:
 ### Example Request (note that `llm_model_name` and `similarity_measure` are optional):
 ```json
 {
-  "text1": "This is a sample text.",
-  "text2": "This is another sample text.",
-  "llm_model_name": "openchat_v3.2_super",
-  "similarity_measure": "all"
+    "text1": "This is a sample text.",
+    "text2": "This is another sample text.",
+    "llm_model_name": "openchat_v3.2_super",
+    "similarity_measure": "all"
 }
 ```""")
 async def compute_similarity_between_strings(request: SimilarityRequest, req: Request, token: str = None) -> SimilarityResponse:
@@ -1489,9 +1489,9 @@ The request must contain the following attributes:
 ### Example:
 ```json
 {
-  "query_text": "Find me the most similar string!",
-  "llm_model_name": "openchat_v3.2_super",
-  "number_of_most_similar_strings_to_return": 5
+    "query_text": "Find me the most similar string!",
+    "llm_model_name": "openchat_v3.2_super",
+    "number_of_most_similar_strings_to_return": 5
 }
 ```
 
@@ -1501,12 +1501,12 @@ The response will include the most similar strings found in the database, along 
 ### Example Response:
 ```json
 {
-  "query_text": "Find me the most similar string!",  
-  "results": [
-    {"search_result_text": "This is the most similar string!", "similarity_to_query_text": 0.9823},
-    {"search_result_text": "Another similar string.", "similarity_to_query_text": 0.9721},
-    ...
-  ]
+    "query_text": "Find me the most similar string!",  
+    "results": [
+        {"search_result_text": "This is the most similar string!", "similarity_to_query_text": 0.9823},
+        {"search_result_text": "Another similar string.", "similarity_to_query_text": 0.9721},
+        ...
+    ]
 }
 ```""",
         response_description="A JSON object containing the query text along with the most similar strings and similarity scores.")
@@ -1570,10 +1570,10 @@ The request must contain the following attributes:
 ### Example:
 ```json
 {
-  "query_text": "Find me the most similar string!",
-  "llm_model_name": "openchat_v3.2_super",
-  "similarity_filter_percentage": 0.02,
-  "number_of_most_similar_strings_to_return": 5
+    "query_text": "Find me the most similar string!",
+    "llm_model_name": "openchat_v3.2_super",
+    "similarity_filter_percentage": 0.02,
+    "number_of_most_similar_strings_to_return": 5
 }
 ```
 
@@ -1583,12 +1583,12 @@ The response will include the most similar strings found in the database, along 
 ### Example Response:
 ```json
 {
-  "query_text": "Find me the most similar string!",
-  "results": [
-    {"search_result_text": "This is the most similar string!", "similarity_to_query_text": {"cosine_similarity": 0.9823, "spearman_rho": 0.8, ... }},
-    {"search_result_text": "Another similar string.", "similarity_to_query_text": {"cosine_similarity": 0.9721, "spearman_rho": 0.75, ... }},
-    ...
-  ]
+    "query_text": "Find me the most similar string!",
+    "results": [
+        {"search_result_text": "This is the most similar string!", "similarity_to_query_text": {"cosine_similarity": 0.9823, "spearman_rho": 0.8, ... }},
+        {"search_result_text": "Another similar string.", "similarity_to_query_text": {"cosine_similarity": 0.9721, "spearman_rho": 0.75, ... }},
+        ...
+    ]
 }
 ```""",
         response_description="A JSON object containing the query text and the most similar strings, along with their similarity scores for multiple measures.")
@@ -1750,12 +1750,12 @@ The request must contain the following attributes:
 ### Example (note that `llm_model_name` is optional):
 ```json
 {
-  "input_prompt": "The Kings of France in the 17th Century:",
-  "llm_model_name": "phind-codellama-34b-python-v1",
-  "temperature": 0.95,
-  "grammar_file_string": "json",
-  "number_of_tokens_to_generate": 500,
-  "number_of_completions_to_generate": 3
+    "input_prompt": "The Kings of France in the 17th Century:",
+    "llm_model_name": "phind-codellama-34b-python-v1",
+    "temperature": 0.95,
+    "grammar_file_string": "json",
+    "number_of_tokens_to_generate": 500,
+    "number_of_completions_to_generate": 3
 }
 ```
 
@@ -1765,36 +1765,36 @@ The response will include the generated text completion, the time taken to compu
 ### Example Response:
 ```json
 [
-  {
-    "input_prompt": "The Kings of France in the 17th Century:",
-    "llm_model_name": "phind-codellama-34b-python-v1",
-    "grammar_file_string": "json",
-    "number_of_tokens_to_generate": 500,
-    "number_of_completions_to_generate": 3,
-    "time_taken_in_seconds": 67.17598033333333,
-    "generated_text": "{\"kings\":[\\n    {\\n        \"name\": \"Henry IV\",\\n        \"reign_start\": 1589,\\n        \"reign_end\": 1610\\n    },\\n    {\\n        \"name\": \"Louis XIII\",\\n        \"reign_start\": 1610,\\n        \"reign_end\": 1643\\n    },\\n    {\\n        \"name\": \"Louis XIV\",\\n        \"reign_start\": 1643,\\n        \"reign_end\": 1715\\n    },\\n    {\\n        \"name\": \"Louis XV\",\\n        \"reign_start\": 1715,\\n        \"reign_end\": 1774\\n    },\\n    {\\n        \"name\": \"Louis XVI\",\\n        \"reign_start\": 1774,\\n        \"reign_end\": 1792\\n    }\\n]}",
-    "llm_model_usage_json": "{\"prompt_tokens\": 13, \"completion_tokens\": 218, \"total_tokens\": 231}"
-  },
-  {
-    "input_prompt": "The Kings of France in the 17th Century:",
-    "llm_model_name": "phind-codellama-34b-python-v1",
-    "grammar_file_string": "json",
-    "number_of_tokens_to_generate": 500,
-    "number_of_completions_to_generate": 3,
-    "time_taken_in_seconds": 67.17598033333333,
-    "generated_text": "{\"kings\":\\n   [ {\"name\": \"Henry IV\",\\n      \"reignStart\": \"1589\",\\n      \"reignEnd\": \"1610\"},\\n     {\"name\": \"Louis XIII\",\\n      \"reignStart\": \"1610\",\\n      \"reignEnd\": \"1643\"},\\n     {\"name\": \"Louis XIV\",\\n      \"reignStart\": \"1643\",\\n      \"reignEnd\": \"1715\"}\\n   ]}",
-    "llm_model_usage_json": "{\"prompt_tokens\": 13, \"completion_tokens\": 115, \"total_tokens\": 128}"
-  },
-  {
-    "input_prompt": "The Kings of France in the 17th Century:",
-    "llm_model_name": "phind-codellama-34b-python-v1",
-    "grammar_file_string": "json",
-    "number_of_tokens_to_generate": 500,
-    "number_of_completions_to_generate": 3,
-    "time_taken_in_seconds": 67.17598033333333,
-    "generated_text": "{\\n\"Henri IV\": \"1589-1610\",\\n\"Louis XIII\": \"1610-1643\",\\n\"Louis XIV\": \"1643-1715\",\\n\"Louis XV\": \"1715-1774\",\\n\"Louis XVI\": \"1774-1792\",\\n\"Louis XVIII\": \"1814-1824\",\\n\"Charles X\": \"1824-1830\",\\n\"Louis XIX (previously known as Charles X): \" \\n    : \"1824-1830\",\\n\"Charles X (previously known as Louis XIX)\": \"1824-1830\"}",
-    "llm_model_usage_json": "{\"prompt_tokens\": 13, \"completion_tokens\": 168, \"total_tokens\": 181}"
-  }
+    {
+        "input_prompt": "The Kings of France in the 17th Century:",
+        "llm_model_name": "phind-codellama-34b-python-v1",
+        "grammar_file_string": "json",
+        "number_of_tokens_to_generate": 500,
+        "number_of_completions_to_generate": 3,
+        "time_taken_in_seconds": 67.17598033333333,
+        "generated_text": "{\"kings\":[\\n    {\\n        \"name\": \"Henry IV\",\\n        \"reign_start\": 1589,\\n        \"reign_end\": 1610\\n    },\\n    {\\n        \"name\": \"Louis XIII\",\\n        \"reign_start\": 1610,\\n        \"reign_end\": 1643\\n    },\\n    {\\n        \"name\": \"Louis XIV\",\\n        \"reign_start\": 1643,\\n        \"reign_end\": 1715\\n    },\\n    {\\n        \"name\": \"Louis XV\",\\n        \"reign_start\": 1715,\\n        \"reign_end\": 1774\\n    },\\n    {\\n        \"name\": \"Louis XVI\",\\n        \"reign_start\": 1774,\\n        \"reign_end\": 1792\\n    }\\n]}",
+        "llm_model_usage_json": "{\"prompt_tokens\": 13, \"completion_tokens\": 218, \"total_tokens\": 231}"
+    },
+    {
+        "input_prompt": "The Kings of France in the 17th Century:",
+        "llm_model_name": "phind-codellama-34b-python-v1",
+        "grammar_file_string": "json",
+        "number_of_tokens_to_generate": 500,
+        "number_of_completions_to_generate": 3,
+        "time_taken_in_seconds": 67.17598033333333,
+        "generated_text": "{\"kings\":\\n   [ {\"name\": \"Henry IV\",\\n      \"reignStart\": \"1589\",\\n      \"reignEnd\": \"1610\"},\\n     {\"name\": \"Louis XIII\",\\n      \"reignStart\": \"1610\",\\n      \"reignEnd\": \"1643\"},\\n     {\"name\": \"Louis XIV\",\\n      \"reignStart\": \"1643\",\\n      \"reignEnd\": \"1715\"}\\n   ]}",
+        "llm_model_usage_json": "{\"prompt_tokens\": 13, \"completion_tokens\": 115, \"total_tokens\": 128}"
+    },
+    {
+        "input_prompt": "The Kings of France in the 17th Century:",
+        "llm_model_name": "phind-codellama-34b-python-v1",
+        "grammar_file_string": "json",
+        "number_of_tokens_to_generate": 500,
+        "number_of_completions_to_generate": 3,
+        "time_taken_in_seconds": 67.17598033333333,
+        "generated_text": "{\\n\"Henri IV\": \"1589-1610\",\\n\"Louis XIII\": \"1610-1643\",\\n\"Louis XIV\": \"1643-1715\",\\n\"Louis XV\": \"1715-1774\",\\n\"Louis XVI\": \"1774-1792\",\\n\"Louis XVIII\": \"1814-1824\",\\n\"Charles X\": \"1824-1830\",\\n\"Louis XIX (previously known as Charles X): \" \\n    : \"1824-1830\",\\n\"Charles X (previously known as Louis XIX)\": \"1824-1830\"}",
+        "llm_model_usage_json": "{\"prompt_tokens\": 13, \"completion_tokens\": 168, \"total_tokens\": 181}"
+    }
 ]
 ```""", response_description="A JSON object containing the the generated text completion of the input prompt and the request details.")
 async def get_text_completions_from_input_prompt(request: TextCompletionRequest, req: Request = None, token: str = None, client_ip: str = None) -> List[TextCompletionResponse]:
@@ -1903,4 +1903,4 @@ def show_logs_default():
     
     
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=LLAMA_EMBEDDING_SERVER_LISTEN_PORT)
+    uvicorn.run(app, host="0.0.0.0", port=SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT)

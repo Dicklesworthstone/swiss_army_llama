@@ -1,5 +1,4 @@
-from llama_2_embeddings_fastapi_server import load_token_level_embedding_model
-from llama_2_embeddings_fastapi_server import configured_logger as logger
+from swiss_army_llama import configured_logger as logger
 import asyncio
 import psutil
 import glob

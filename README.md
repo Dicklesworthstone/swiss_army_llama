@@ -1,25 +1,25 @@
-# Llama2 Embeddings FastAPI Service
+# Swiss Army Llama
 
 ## Introduction
 
-The Llama2 Embedding Server is designed to facilitate and optimize the process of obtaining text embeddings using different LLMs via llama_cpp and langchain. To avoid wasting computation, these embeddings are cached in SQlite and retrieved if they have already been computed before. To speed up the process of loading multiple LLMs, optional RAM Disks can be used, and the process for creating and managing them is handled automatically for you.
+The Swiss Army Llama is designed to facilitate and optimize the process of working with local LLMs by using FastAPI to expose convenient REST endpoints for various tasks, including obtaining text embeddings and completions using different LLMs via llama_cpp, as well as automating the process of obtaining all the embeddings for most common document types, including PDFs (even ones that require OCR), Word file, etc; it even allows you to submit an audio file and automatically transcribes it with the Whisper model, cleans up the resulting text, and then computes the embeddings for it. To avoid wasting computation, these embeddings are cached in SQlite and retrieved if they have already been computed before. To speed up the process of loading multiple LLMs, optional RAM Disks can be used, and the process for creating and managing them is handled automatically for you. With a quick and easy setup process, you will immediately get access to a veritable "Swiss Army Knife" of LLM related tools, all accessible via a convenient Swagger UI and ready to be integrated into your own applications with minimal fuss or configuration required.
 
-Some additional useful endpoints are provided, such as computing semantic similarity between submitted text strings. The service leverages a high-performance Rust-based library, `fast_vector_similarity`, to offer a range of similarity measures including `spearman_rho`, `kendall_tau`, `approximate_distance_correlation`, `jensen_shannon_similarity`, and [`hoeffding_d`](https://blogs.sas.com/content/iml/2021/05/03/examples-hoeffding-d.html). Additionally, semantic search across all your cached embeddings is supported using FAISS vector searching. You can either use the built in cosine similarity from FAISS, or supplement this with a second pass that computes the more sophisticated similarity measures for the most relevant subset of the stored vectors found using cosine similarity.
+Some additional useful endpoints are provided, such as computing semantic similarity between submitted text strings. The service leverages a high-performance Rust-based library, `fast_vector_similarity`, to offer a range of similarity measures including `spearman_rho`, `kendall_tau`, `approximate_distance_correlation`, `jensen_shannon_similarity`, and [`hoeffding_d`](https://blogs.sas.com/content/iml/2021/05/03/examples-hoeffding-d.html). Additionally, semantic search across all your cached embeddings is supported using FAISS vector searching. You can either use the built in cosine similarity from FAISS, or supplement this with a second pass that computes the more sophisticated similarity measures for the most relevant subset of the stored vectors found using cosine similarity (see the advanced semantic search endpoint for this functionality).
 
-You can now submit not only plaintext and fully digital PDFs but also MS Word documents, images, and other file types supported by the textract library. The library can automatically apply OCR using Tesseract for scanned text. The returned embeddings for each sentence in a document can be organized in various formats like records, table, etc., using the Pandas to_json() function. The results can be returned either as a ZIP file containing a JSON file or as a direct JSON response. You can now also submit audio files in MP3 or WAV formats. The library uses OpenAI's Whisper model, as optimized by the Faster Whisper Python library, to transcribe the audio into text. Optionally, this transcript can be treated like any other document, with each sentence's embeddings computed and stored. The results are returned as a URL to a downloadable ZIP file containing a JSON with the embedding vector data.
+As mentioned above, you can now submit not only plaintext and fully digital PDFs but also MS Word documents, images, and other file types supported by the textract library. The library can automatically apply OCR using Tesseract for scanned text. The returned embeddings for each sentence in a document can be organized in various formats like records, table, etc., using the Pandas to_json() function. The results can be returned either as a ZIP file containing a JSON file or as a direct JSON response. You can now also submit audio files in MP3 or WAV formats. The library uses OpenAI's Whisper model, as optimized by the Faster Whisper Python library, to transcribe the audio into text. Optionally, this transcript can be treated like any other document, with each sentence's embeddings computed and stored. The results are returned as a URL to a downloadable ZIP file containing a JSON with the embedding vector data.
 
 In addition to fixed-sized embedding vectors, we also expose functionality that allows you to get back token-level embeddings, where each token in the input stream is embedded with its context in the string as a full sized vector, thus producing a matrix that has a number of rows equal to the number of tokens in the input string. This includes far more nuanced information about the contents of the string at the expense of much greater compute and storage requirements. The other drawback is that, instead of having the same sized output for every string, regardless of length (which makes it very easy to compare unequal length strings using cosine similarity and other measures), the token-level embedding matrix obviously differs in dimensions for two different strings if the strings have different numbers of tokens. To deal with this, we introduce combined feature vectors, which compute the column-wise mean, min, max, and std. deviation of the token-level emeddding matrix, and concatenate these together in to a single huge matrix; this allows you to compare strings of different lengths while still capturing more nuance. The combined results, including the embedding matrix and associated combined feature vector, can similarly be returned as either a zip file or direct JSON response.
 
 Finally, we add a new endpoint for generating multiple text completions for a given input prompt, with the ability to specify a grammar file that will enforce a particular form of response, such as JSON. There is also a useful new utility feature: a real-time application log viewer that can be accessed via a web browser, which allows for syntax highlighting and offers options for downloading the logs or copying them to the clipboard. This allows a user to watch the logs without having direct SSH access to the server.
 
 ## Screenshot 
-![Llama2 FastAPI Service Swagger UI](https://github.com/Dicklesworthstone/llama_embeddings_fastapi_service/raw/main/Llama2-FastAPI-Service-%20Swagger%20Screenshot.png)
+![Swiss Army Llama Swagger UI](https://github.com/Dicklesworthstone/swiss_army_llama/raw/main/swiss_army_llama__swagger_screenshot.png)
 
 *TLDR:* If you just want to try it very quickly on a fresh Ubuntu 22+ machine (warning, this will install docker using apt):
 
 ```bash
-git clone https://github.com/Dicklesworthstone/llama_embeddings_fastapi_service
-cd llama_embeddings_fastapi_service
+git clone https://github.com/Dicklesworthstone/swiss_army_llama
+cd swiss_army_llama
 chmod +x setup_dockerized_app_on_fresh_machine.sh
 sudo ./setup_dockerized_app_on_fresh_machine.sh
 ```
@@ -96,15 +96,15 @@ pytz
 You can run the application using the following command:
 
 ```bash
-python llama_2_embeddings_fastapi_server.py
+python swiss_army_llama.py
 ```
 
-The server will start on `0.0.0.0` at the port defined by the `LLAMA_EMBEDDING_SERVER_LISTEN_PORT` variable.
+The server will start on `0.0.0.0` at the port defined by the `SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT` variable.
 
 Access the Swagger UI:
 
 ```
-http://localhost:<LLAMA_EMBEDDING_SERVER_LISTEN_PORT>
+http://localhost:<SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT>
 ```
 
 ## Configuration
@@ -116,7 +116,7 @@ You can configure the service easily by editing the included `.env` file. Here's
 - `MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS`: Maximum number of parallel inference tasks. (e.g., `30`)
 - `DEFAULT_MODEL_NAME`: Default model name to use. (e.g., `yarn-llama-2-13b-128k`)
 - `LLM_CONTEXT_SIZE_IN_TOKENS`: Context size in tokens for LLM. (e.g., `512`)
-- `LLAMA_EMBEDDING_SERVER_LISTEN_PORT`: Port number for the service. (e.g., `8089`)
+- `SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT`: Port number for the service. (e.g., `8089`)
 - `MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING`: Minimum string length for document embedding. (e.g., `15`)
 - `MAX_RETRIES`: Maximum retries for locked database. (e.g., `10`)
 - `DB_WRITE_BATCH_SIZE`: Database write batch size. (e.g., `25`)
@@ -152,15 +152,16 @@ The application provides functionalities to set up, clear, and manage RAM Disk. 
 To run it natively (not using Docker) in a Python venv, you can use these commands:
 
 ```bash
-git clone https://github.com/Dicklesworthstone/llama_embeddings_fastapi_service
-cd llama_embeddings_fastapi_service
+git clone https://github.com/Dicklesworthstone/swiss_army_llama
+cd swiss_army_llama
 python3 -m venv venv
 source venv/bin/activate
 python3 -m pip install --upgrade pip
 python3 -m pip install wheel
 pip install -r requirements.txt
-python3 llama_2_embeddings_fastapi_server.py
+python3 swiss_army_llama.py
 ```
+
 Then access the FastAPI Swagger page at `http://localhost:8089`.
 
 ## API Endpoints
@@ -191,11 +192,12 @@ The application has robust exception handling to deal with various types of erro
 
 Logging is configured at the INFO level to provide detailed logs for debugging and monitoring. The logger provides information about the state of the application, errors, and activities.
 
-The logs are stored in a file named `llama2_embeddings_fastapi_service.log`, and a log rotation mechanism is implemented to handle log file backups. The rotating file handler is configured with a maximum file size of 10 MB, and it keeps up to 5 backup files.
+The logs are stored in a file named `swiss_army_llama.log`, and a log rotation mechanism is implemented to handle log file backups. The rotating file handler is configured with a maximum file size of 10 MB, and it keeps up to 5 backup files.
 
 When a log file reaches its maximum size, it is moved to the `old_logs` directory, and a new log file is created. The log entries are also printed to the standard output stream.
 
 Here are some details of the logging configuration:
+
 - Log Level: INFO
 - Log Format: `%(asctime)s - %(levelname)s - %(message)s`
 - Max Log File Size: 10 MB
@@ -209,6 +211,7 @@ Additionally, the log level for SQLAlchemy's engine is set to WARNING to suppres
 The application uses a SQLite database via SQLAlchemy ORM. Here are the data models used, which can be found in the `embeddings_data_models.py` file:
 
 ### TextEmbedding Table
+
 - `id`: Primary Key
 - `text`: Text for which the embedding was computed
 - `text_hash`: Hash of the text, computed using SHA3-256
@@ -221,6 +224,7 @@ The application uses a SQLite database via SQLAlchemy ORM. Here are the data mod
 - `document_file_hash`: Foreign Key referencing the DocumentEmbedding table
 
 ### DocumentEmbedding Table
+
 - `id`: Primary Key
 - `document_hash`: Foreign Key referencing the Documents table
 - `filename`: Name of the document file
@@ -231,11 +235,13 @@ The application uses a SQLite database via SQLAlchemy ORM. Here are the data mod
 - `document_embedding_results_json`: The computed embedding results in JSON format
 
 ### Document Table
+
 - `id`: Primary Key
 - `llm_model_name`: Model name associated with the document
 - `document_hash`: Computed Hash of the document
 
 ### TokenLevelEmbedding Table
+
 - `id`: Primary Key
 - `token`: Token for which the embedding was computed
 - `token_hash`: Hash of the token, computed using SHA3-256
@@ -243,6 +249,7 @@ The application uses a SQLite database via SQLAlchemy ORM. Here are the data mod
 - `token_level_embedding_json`: The computed token-level embedding in JSON format
 
 ### TokenLevelEmbeddingBundle Table
+
 - `id`: Primary Key
 - `input_text`: Input text associated with the token-level embeddings
 - `input_text_hash`: Hash of the input text
@@ -250,6 +257,7 @@ The application uses a SQLite database via SQLAlchemy ORM. Here are the data mod
 - `token_level_embeddings_bundle_json`: JSON containing the token-level embeddings
 
 ### TokenLevelEmbeddingBundleCombinedFeatureVector Table
+
 - `id`: Primary Key
 - `token_level_embedding_bundle_id`: Foreign Key referencing the TokenLevelEmbeddingBundle table
 - `llm_model_name`: Model name associated with the combined feature vector
@@ -257,6 +265,7 @@ The application uses a SQLite database via SQLAlchemy ORM. Here are the data mod
 - `combined_feature_vector_hash`: Hash of the combined feature vector
 
 ### AudioTranscript Table
+
 - `audio_file_hash`: Primary Key
 - `audio_file_name`: Name of the audio file
 - `audio_file_size_mb`: File size in MB
@@ -266,19 +275,19 @@ The application uses a SQLite database via SQLAlchemy ORM. Here are the data mod
 
 ### Database Relationships
 
-1. **TextEmbedding - DocumentEmbedding**:  
-   - `TextEmbedding` has a Foreign Key `document_file_hash` that references `DocumentEmbedding`'s `file_hash`. 
+1. **TextEmbedding - DocumentEmbedding**:
+   - `TextEmbedding` has a Foreign Key `document_file_hash` that references `DocumentEmbedding`'s `file_hash`.
    - This means multiple text embeddings can belong to a single document embedding, establishing a one-to-many relationship.
   
-2. **DocumentEmbedding - Document**:  
+2. **DocumentEmbedding - Document**:
    - `DocumentEmbedding` has a Foreign Key `document_hash` that references `Document`'s `document_hash`.
    - This establishes a one-to-many relationship between `Document` and `DocumentEmbedding`.
 
 3. **TokenLevelEmbedding - TokenLevelEmbeddingBundle**:  
    - `TokenLevelEmbedding` has a Foreign Key `token_level_embedding_bundle_id` that references `TokenLevelEmbeddingBundle`'s `id`.
    - This is a one-to-many relationship, meaning multiple token-level embeddings can belong to a single token-level embedding bundle.
-   
-4. **TokenLevelEmbeddingBundle - TokenLevelEmbeddingBundleCombinedFeatureVector**:  
+
+4. **TokenLevelEmbeddingBundle - TokenLevelEmbeddingBundleCombinedFeatureVector**:
    - `TokenLevelEmbeddingBundle` has a one-to-one relationship with `TokenLevelEmbeddingBundleCombinedFeatureVector` via `token_level_embedding_bundle_id`.
    - This means each token-level embedding bundle can have exactly one combined feature vector.
 
@@ -294,28 +303,34 @@ The application uses a SQLite database via SQLAlchemy ORM. Here are the data mod
 This section highlights the major performance enhancements integrated into the provided code to ensure swift responses and optimal resource management.
 
 ### 1. **Asynchronous Programming**:
+
 - **Benefit**: Handles multiple tasks concurrently, enhancing efficiency for I/O-bound operations like database transactions and network requests.
 - **Implementation**: Utilizes Python's `asyncio` library for asynchronous database operations.
 
 ### 2. **Database Optimizations**:
+
 - **Write-Ahead Logging (WAL) Mode**: Enables concurrent reads and writes, optimizing for applications with frequent write demands.
 - **Retry Logic with Exponential Backoff**: Manages locked databases by retrying operations with progressive waiting times.
 - **Batch Writes**: Aggregates write operations for more efficient database interactions.
 - **DB Write Queue**: Uses an asynchronous queue to serialize write operations, ensuring consistent and non-conflicting database writes.
 
 ### 3. **RAM Disk Utilization**:
+
 - **Benefit**: Speeds up I/O-bound tasks by prioritizing operations in RAM over disk.
 - **Implementation**: Detects and prioritizes a RAM disk (`/mnt/ramdisk`) if available, otherwise defaults to the standard file system.
 
 ### 4. **Model Caching**:
+
 - **Benefit**: Reduces overhead by keeping loaded models in memory for subsequent requests.
 - **Implementation**: Uses a global `model_cache` dictionary to store and retrieve models.
 
 ### 5. **Parallel Inference**:
+
 - **Benefit**: Enhances processing speed for multiple data units, like document sentences.
 - **Implementation**: Employs `asyncio.gather` for concurrent inferences, regulated by a semaphore (`MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS`).
 
 ### 6. **Embedding Caching**:
+
 - **Benefit**: Once embeddings are computed for a particular text, they are stored in the database, eliminating the need for re-computation during subsequent requests.
 - **Implementation**: When a request is made to compute an embedding, the system first checks the database. If the embedding for the given text is found, it is returned immediately, ensuring faster response times.
 
@@ -352,11 +367,11 @@ You may need to log out and log back in or restart your system to apply the new 
 
 1. **Clone the Repository:**
 
-   Clone the Llama2 Embeddings API Service repository to your local machine:
+   Clone the Swiss Army Llama repository to your local machine:
 
    ```bash
-   git clone https://github.com/Dicklesworthstone/llama_embeddings_fastapi_service
-   cd llama_embeddings_fastapi_service
+   git clone https://github.com/Dicklesworthstone/swiss_army_llama
+   cd swiss_army_llama
    ```
 
 2. **Build the Docker Image:**
@@ -381,7 +396,7 @@ You may need to log out and log back in or restart your system to apply the new 
 
    You can interact then with the API using tools like `curl` or by accessing the FastAPI documentation at `http://localhost:8089/docs`.
 
-6. **Viewing Logs:**
+5. **Viewing Logs:**
 
    Logs from the application can be viewed directly in the terminal where you ran the `docker run` command.
 
@@ -400,7 +415,7 @@ Based on the provided code, I'll help you update the `Startup Procedures` sectio
 
 During startup, the application performs the following tasks:
 
-1. **Database Initialization**: 
+1. **Database Initialization**:
     - The application initializes the SQLite database, setting up tables and executing important PRAGMAs to optimize performance. 
     - Some of the important SQLite PRAGMAs include setting the database to use Write-Ahead Logging (WAL) mode, setting synchronous mode to NORMAL, increasing cache size to 1GB, setting the busy timeout to 2 seconds, and setting the WAL autocheckpoint to 100.
 2. **Initialize Database Writer**:
@@ -410,11 +425,11 @@ During startup, the application performs the following tasks:
     - If the `USE_RAMDISK` variable is enabled and the user has the required permissions, the application sets up a RAM Disk.
     - The application checks if there's already a RAM Disk set up at the specified path, if not, it calculates the optimal size for the RAM Disk and sets it up.
     - If the RAM Disk is enabled but the user lacks the required permissions, the RAM Disk feature is disabled and the application proceeds without it.
-4. **Model Downloads**: 
+4. **Model Downloads**:
     - The application downloads the required models.
 5. **Model Loading**:
     - Each downloaded model is loaded into memory. If any model file is not found, an error log is recorded.
-6. **Build FAISS Indexes**: 
+6. **Build FAISS Indexes**:
     - The application creates FAISS indexes for efficient similarity search using the embeddings from the database.
     - Separate FAISS indexes are built for token-level embeddings.
     - Associated texts are stored by model name for further use.
@@ -499,7 +514,6 @@ Performs a two-step advanced semantic search. Utilizes FAISS and cosine similari
   "number_of_most_similar_strings_to_return": 5
 }
 ```
-
 ### 5. `/get_all_embedding_vectors_for_document/` (POST)
 
 #### Purpose
@@ -512,50 +526,35 @@ Extract text embeddings for a document. The library now supports a wide range of
 - `send_back_json_or_zip_file`: Whether to return a JSON file or a ZIP file containing the embeddings file (optional, defaults to `zip`).
 - `token`: Security token (optional).
 
+
 ### 6. `/compute_transcript_with_whisper_from_audio/` (POST)
 
 #### Purpose
-Transcribe an audio file and optionally compute document embeddings. This endpoint uses the Whisper model for transcription and a specified or default language model for embeddings. The transcription and embeddings are then stored, and a ZIP file containing the embeddings can be downloaded.
+Transcribe an audio file and optionally compute document embeddings for the resulting transcript. This endpoint uses the Whisper model for transcription and a language model for generating embeddings. The transcription and embeddings can then be stored, and a ZIP file containing the embeddings can be made available for download.
 
 #### Parameters
-- `file`: The uploaded audio file (either MP3 or WAV).
-- `compute_embeddings_for_resulting_transcript_document`: Boolean to indicate if document embeddings should be computed (optional, defaults to True).
-- `llm_model_name`: (Optional) The model used to calculate embeddings.
+- `file`: The audio file that you need to upload for transcription.
+- `compute_embeddings_for_resulting_transcript_document`: Boolean to indicate whether document embeddings should be computed (optional, defaults to False).
+- `llm_model_name`: The language model used for computing embeddings (optional, defaults to the default model name).
+- `req`: HTTP request object for additional request metadata (optional).
 - `token`: Security token (optional).
+- `client_ip`: Client IP address (optional).
 
-### 7. `/get_list_of_available_model_names/` (GET)
+#### Request File and Parameters
+You will need to use a multipart/form-data request to upload the audio file. The additional parameters like `compute_embeddings_for_resulting_transcript_document` and `llm_model_name` can be sent along as form fields.
 
-#### Purpose
-Retrieve the list of available model names for generating embeddings.
+#### Example Request
+```bash
+curl -X 'POST' \
+  'http://localhost:8000/compute_transcript_with_whisper_from_audio/' \
+  -H 'accept: application/json' \
+  -H 'Authorization: Bearer YOUR_ACCESS_TOKEN' \
+  -F 'file=@your_audio_file.wav' \
+  -F 'compute_embeddings_for_resulting_transcript_document=true' \
+  -F 'llm_model_name=custom-llm-model'
+```
 
-#### Parameters
-- `token`: Security token (optional).
-
-### 8. `/get_all_stored_strings/` (GET)
-
-#### Purpose
-Retrieve a list of all stored strings from the database for which embeddings have been computed.
-
-#### Parameters
-- `token`: Security token (optional).
-
-### 9. `/get_all_stored_documents/` (GET)
-
-#### Purpose
-Retrieve a list of all stored documents from the database for which embeddings have been computed.
-
-#### Parameters
-- `token`: Security token (optional).
-
-### 10. `/clear_ramdisk/` (POST)
-
-#### Purpose
-Clear the RAM Disk to free up memory.
-
-#### Parameters
-- `token`: Security token (optional).
-
-### 11. `/get_token_level_embeddings_matrix_and_combined_feature_vector_for_string/` (POST)
+### 7. `/get_token_level_embeddings_matrix_and_combined_feature_vector_for_string/` (POST)
 
 #### Purpose
 Retrieve the token-level embeddings and combined feature vector for a given input text using the specified model.
@@ -570,7 +569,23 @@ Retrieve the token-level embeddings and combined feature vector for a given inpu
 - `json_format`: Format for JSON response of token-level embeddings (optional).
 - `send_back_json_or_zip_file`: Whether to return a JSON response or a ZIP file containing the JSON file (optional, defaults to `zip`).
 
-### 12. `/get_text_completions_from_input_prompt/` (POST)
+
+
+#### Response
+The response will be a JSON object containing complete transcription details, computational times, and an optional URL for downloading a ZIP file containing the document embeddings.
+
+#### Example Response
+```json
+{
+  "transcript": "This is the transcribed text...",
+  "time_taken_for_transcription_in_seconds": 12.345,
+  "time_taken_for_embedding_computation_in_seconds": 3.456,
+  "embedding_download_url": "http://localhost:8000/download/your_embedding.zip",
+  "llm_model_name": "custom-llm-model"
+}
+```
+
+### 8. `/get_text_completions_from_input_prompt/` (POST)
 
 #### Purpose
 Generate text completions for a given input prompt using the specified model.
@@ -600,3 +615,45 @@ The JSON object should have the following keys:
   "number_of_tokens_to_generate": 500,
   "number_of_completions_to_generate": 3
 }
+```
+
+### 9. `/get_list_of_available_model_names/` (GET)
+
+#### Purpose
+Retrieve the list of available model names for generating embeddings.
+
+#### Parameters
+- `token`: Security token (optional).
+
+### 10. `/get_all_stored_strings/` (GET)
+
+#### Purpose
+Retrieve a list of all stored strings from the database for which embeddings have been computed.
+
+#### Parameters
+- `token`: Security token (optional).
+
+### 11. `/get_all_stored_documents/` (GET)
+
+#### Purpose
+Retrieve a list of all stored documents from the database for which embeddings have been computed.
+
+#### Parameters
+- `token`: Security token (optional).
+
+### 12. `/clear_ramdisk/` (POST)
+
+#### Purpose
+Clear the RAM Disk to free up memory.
+
+#### Parameters
+- `token`: Security token (optional).
+
+
+### 13. `/download/{file_name}` (GET)
+
+#### Purpose
+Download a ZIP file containing document embeddings that were generated through the `/compute_transcript_with_whisper_from_audio/` endpoint. The URL for this download will be supplied in the JSON response of the audio file transcription endpoint.
+
+#### Parameters
+- `file_name`: The name of the ZIP file that you want to download.

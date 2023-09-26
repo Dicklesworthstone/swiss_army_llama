@@ -4,7 +4,7 @@ import html
 from datetime import datetime, timedelta
 from pytz import timezone
 
-log_file_path = 'llama2_embeddings_fastapi_service.log'
+log_file_path = 'swiss_army_llama.log'
 
 def safe_highlight_func(text, pattern, replacement):
     try:
@@ -152,7 +152,7 @@ def show_logs_func(minutes: int = 5):
             var text = document.querySelector('#log-container').innerText;
             var element = document.createElement('a');
             element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(text));
-            element.setAttribute('download', 'llama2_embeddings_fastapi_service_monitor_log__' + new Date().toISOString() + '.txt');
+            element.setAttribute('download', 'swiss_army_llama_monitor_log__' + new Date().toISOString() + '.txt');
             element.style.display = 'none';
             document.body.appendChild(element);
             element.click();
