@@ -20,7 +20,9 @@ dependencies:
   - scikit-learn
   - llama-cpp-python
   - httpx
-  - numba
-  - scipy
-  - hyppo
   - filelock
+  - fast_vector_similarity
+  - faster-whisper
+  - textract
+  - pytz
+  
