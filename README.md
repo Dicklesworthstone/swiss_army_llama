@@ -76,7 +76,6 @@ llama-cpp-python
 httpx
 filelock
 fast_vector_similarity
-pandas
 faster-whisper
 textract
 pytz
