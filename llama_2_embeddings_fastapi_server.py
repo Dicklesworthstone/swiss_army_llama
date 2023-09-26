@@ -23,7 +23,7 @@ from datetime import datetime
 from hashlib import sha3_256
 from logging.handlers import RotatingFileHandler
 from typing import List, Optional, Tuple, Dict, Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 import numpy as np
 from decouple import config
 import uvicorn
@@ -117,6 +117,10 @@ AsyncSessionLocal = sessionmaker(
 )
 
 # Misc. utility functions and db writer class:
+def clean_filename_for_url_func(dirty_filename: str) -> str:
+    clean_filename = re.sub(r'[^\w\s]', '', dirty_filename) # Remove special characters and replace spaces with underscores
+    clean_filename = clean_filename.replace(' ', '_')
+    return clean_filename
 
 class DatabaseWriter:
     def __init__(self, queue):
@@ -448,6 +452,9 @@ async def _get_transcript_from_db(audio_file_hash: str) -> Optional[dict]:
             except json.JSONDecodeError as e:
                 raise ValueError(f"JSON Decode Error: {e}")
             if not isinstance(segments_json, list) or not isinstance(combined_transcript_text_list_of_metadata_dicts, list) or not isinstance(info_json, dict):
+                logger.error(f"Type of segments_json: {type(segments_json)}, Value: {segments_json}")
+                logger.error(f"Type of combined_transcript_text_list_of_metadata_dicts: {type(combined_transcript_text_list_of_metadata_dicts)}, Value: {combined_transcript_text_list_of_metadata_dicts}")
+                logger.error(f"Type of info_json: {type(info_json)}, Value: {info_json}")
                 raise ValueError("Deserialized JSON does not match the expected format.")
             audio_transcript_response = {
                 "id": row.id,
@@ -556,7 +563,7 @@ async def compute_and_store_transcript_embeddings(audio_file_name, list_of_trans
     zip_dir = 'generated_transcript_embeddings_zip_files'
     if not os.path.exists(zip_dir):
         os.makedirs(zip_dir)
-    sanitized_file_name = audio_file_name.replace('.', '__')
+    sanitized_file_name = clean_filename_for_url_func(audio_file_name)
     document_name = f"automatic_whisper_transcript_of__{sanitized_file_name}"
     file_hash = sha3_256(combined_transcript_text.encode('utf-8')).hexdigest()
     computed_embeddings = await compute_embeddings_for_document(list_of_transcript_sentences, llm_model_name, ip_address, file_hash)
@@ -1866,14 +1873,22 @@ async def startup_event():
             logger.error(e)
     faiss_indexes, token_faiss_indexes, associated_texts_by_model = await build_faiss_indexes()
 
+
 @app.get("/download/{file_name}")
 async def download_file(file_name: str):
-    file_path = os.path.join("generated_transcript_embeddings_zip_files", file_name)
-    if os.path.exists(file_path):
-        return FileResponse(file_path, media_type="application/zip", filename=file_name)
+    decoded_file_name = unquote(file_name)
+    file_path = os.path.join("generated_transcript_embeddings_zip_files", decoded_file_name)
+    absolute_file_path = os.path.abspath(file_path)
+    logger.info(f"Trying to fetch file from: {absolute_file_path}")
+    if os.path.exists(absolute_file_path):
+        with open(absolute_file_path, 'rb') as f:
+            logger.info(f"File first 10 bytes: {f.read(10)}")
+        return FileResponse(absolute_file_path, media_type="application/zip", filename=decoded_file_name)
     else:
+        logger.error(f"File not found at: {absolute_file_path}")
         raise HTTPException(status_code=404, detail="File not found")
     
+
 @app.get("/show_logs_incremental/{minutes}/{last_position}", response_model=ShowLogsIncrementalModel)
 def show_logs_incremental(minutes: int, last_position: int):
     return show_logs_incremental_func(minutes, last_position)
