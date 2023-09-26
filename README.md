@@ -27,6 +27,8 @@ sudo ./setup_dockerized_app_on_fresh_machine.sh
 To run it natively (not using Docker) in a Python venv (recommended!), you can use these commands:
 
 ```bash
+sudo apt-get update
+sudo apt-get install libxml2-dev libxslt1-dev antiword unrtf poppler-utils pstotext tesseract-ocr flac ffmpeg lame libmad0 libsox-fmt-mp3 sox libjpeg-dev swig -y
 git clone https://github.com/Dicklesworthstone/swiss_army_llama
 cd swiss_army_llama
 python3 -m venv venv
