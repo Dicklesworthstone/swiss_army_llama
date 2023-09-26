@@ -24,7 +24,20 @@ chmod +x setup_dockerized_app_on_fresh_machine.sh
 sudo ./setup_dockerized_app_on_fresh_machine.sh
 ```
 
-Then open a browser to `<your_static_ip_address>:8089` if you're using a VPS.
+To run it natively (not using Docker) in a Python venv (recommended!), you can use these commands:
+
+```bash
+git clone https://github.com/Dicklesworthstone/swiss_army_llama
+cd swiss_army_llama
+python3 -m venv venv
+source venv/bin/activate
+python3 -m pip install --upgrade pip
+python3 -m pip install wheel
+pip install -r requirements.txt
+python3 swiss_army_llama.py
+```
+
+Then open a browser to `<your_static_ip_address>:8089` if you're using a VPS to get to the FastAPI Swagger page at `http://localhost:8089`.
 
 Or to `localhost:8089` if you're using your own machine-- but, really, you should never run untrusted code with sudo on your own machine! Just get a cheap VPS to experiment with for $30/month.
 
@@ -148,21 +161,6 @@ username ALL=(ALL) NOPASSWD: /bin/umount /mnt/ramdisk
 ```
 
 The application provides functionalities to set up, clear, and manage RAM Disk. RAM Disk is used to store models in memory for faster access. It calculates the available RAM and sets up the RAM Disk accordingly. The functions `setup_ramdisk`, `copy_models_to_ramdisk`, and `clear_ramdisk` manage these tasks.
-
-To run it natively (not using Docker) in a Python venv, you can use these commands:
-
-```bash
-git clone https://github.com/Dicklesworthstone/swiss_army_llama
-cd swiss_army_llama
-python3 -m venv venv
-source venv/bin/activate
-python3 -m pip install --upgrade pip
-python3 -m pip install wheel
-pip install -r requirements.txt
-python3 swiss_army_llama.py
-```
-
-Then access the FastAPI Swagger page at `http://localhost:8089`.
 
 ## API Endpoints
 
