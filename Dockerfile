@@ -25,7 +25,8 @@ RUN apt-get update && apt-get install -y \
     libmad0 \
     libsox-fmt-mp3 \
     sox \
-    libjpeg-dev swig \
+    libjpeg-dev\
+    swig \
     sudo && \
     rm -rf /var/lib/apt/lists/*
 
