@@ -20,10 +20,6 @@ sudo docker --version
 echo "Adding current user to the Docker group..."
 sudo usermod -aG docker $USER
 
-# Install dependencies for textract
-echo "Installing textract dependencies..."
-sudo apt-get install libxml2-dev libxslt1-dev antiword unrtf poppler-utils pstotext tesseract-ocr flac ffmpeg lame libmad0 libsox-fmt-mp3 sox libjpeg-dev swig -y
-
 # Remove the old directory if it exists
 echo "Removing old llama_embeddings_fastapi_service directory..."
 rm -rf llama_embeddings_fastapi_service
