@@ -162,6 +162,8 @@ cython_debug/
 #ignore .bin model files and .sqlite files
 *.bin
 *.sqlite
+*.sqlite-shm
+*.sqlite-wal
 *.gguf
 generated_transcript_embeddings_zip_files
 old_logs
