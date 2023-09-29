@@ -1,6 +1,8 @@
 # 🇨🇭🎖️🦙 Swiss Army Llama
 
-<img src="https://github.com/Dicklesworthstone/swiss_army_llama/raw/main/swiss_army_llama_logo.webp" width="700">
+<div align="center">
+  <img src="https://github.com/Dicklesworthstone/swiss_army_llama/raw/main/swiss_army_llama_logo.webp" width="500">
+</div>
 
 ## Introduction
 
