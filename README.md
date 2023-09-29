@@ -148,11 +148,17 @@ You can configure the service easily by editing the included `.env` file. Here's
 
 ## Contributing
 
-If you'd like to contribute to the project, please submit a pull request.
+If you'd like to contribute to the project, please submit a pull request! Seriously, I'd love to get some more community going so we can make this a standard library!
 
 ## License
 
 This project is licensed under the MIT License.
+
+## Some Llama Knife Images I found on Google
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Dicklesworthstone/swiss_army_llama/main/llama_knife_sticker.webp" width="500" style="margin-right: 10px;">
+  <img src="https://raw.githubusercontent.com/Dicklesworthstone/swiss_army_llama/main/llama_knife_sticker2.jpg" width="500">
+</p>
 
 ---
 
