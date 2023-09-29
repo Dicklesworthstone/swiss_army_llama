@@ -1,5 +1,7 @@
 # 🇨🇭🎖️🦙 Swiss Army Llama
 
+![Swiss Army Llama Logo](https://github.com/Dicklesworthstone/swiss_army_llama/raw/main/swiss_army_llama_logo.webp)
+
 ## Introduction
 
 The Swiss Army Llama is designed to facilitate and optimize the process of working with local LLMs by using FastAPI to expose convenient REST endpoints for various tasks, including obtaining text embeddings and completions using different LLMs via llama_cpp, as well as automating the process of obtaining all the embeddings for most common document types, including PDFs (even ones that require OCR), Word file, etc; it even allows you to submit an audio file and automatically transcribes it with the Whisper model, cleans up the resulting text, and then computes the embeddings for it. To avoid wasting computation, these embeddings are cached in SQlite and retrieved if they have already been computed before. To speed up the process of loading multiple LLMs, optional RAM Disks can be used, and the process for creating and managing them is handled automatically for you. With a quick and easy setup process, you will immediately get access to a veritable "Swiss Army Knife" of LLM related tools, all accessible via a convenient Swagger UI and ready to be integrated into your own applications with minimal fuss or configuration required.
