@@ -17,4 +17,5 @@ filelock
 fast_vector_similarity
 faster-whisper
 textract
+pytest
 pytz
