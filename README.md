@@ -412,10 +412,6 @@ You may need to log out and log back in or restart your system to apply the new 
 
 ---
 
-Based on the provided code, I'll help you update the `Startup Procedures` section of your `readme.md` file. Here's the updated version:
-
----
-
 ## Startup Procedures
 
 During startup, the application performs the following tasks:
