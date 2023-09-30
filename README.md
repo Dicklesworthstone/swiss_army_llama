@@ -183,6 +183,7 @@ The following endpoints are available:
 - **GET `/get_all_stored_strings/`**: Retrieve All Strings. Retrieves a list of all stored strings from the database for which embeddings have been computed.
 - **GET `/get_all_stored_documents/`**: Retrieve All Stored Documents. Retrieves a list of all stored documents from the database for which embeddings have been computed.
 - **GET `/show_logs/`**:  Shows logs for the last 5 minutes by default. Can also provide a parameter like this: `/show_logs/{minutes}` to get the last N minutes of log data.
+- **POST `/add_new_model/`**: Add New Model by URL. Submit a new model URL for download and use. The model must be in `.gguf` format and larger than 100 MB to ensure it's a valid model file (you can directly paste in the Huggingface URL)
 - **POST `/get_embedding_vector_for_string/`**: Retrieve Embedding Vector for a Given Text String. Retrieves the embedding vector for a given input text string using the specified model.
 - **POST `/get_token_level_embeddings_matrix_and_combined_feature_vector_for_string/`**: Retrieve Token-Level Embeddings and Combined Feature Vector for a Given Input String. Retrieve the token-level embeddings and combined feature vector for a given input text using the specified model.
 - **POST `/compute_similarity_between_strings/`**: Compute Similarity Between Two Strings. Leverages the `fast_vector_similarity` library to compute the similarity between two given input strings using specified model embeddings and a selected similarity measure.
@@ -664,3 +665,12 @@ Download a ZIP file containing document embeddings that were generated through t
 
 #### Parameters
 - `file_name`: The name of the ZIP file that you want to download.
+
+### 14. `/add_new_model/` (POST)
+
+#### Purpose
+Submit a new model URL for download and use. The model must be in `.gguf` format and larger than 100 MB to ensure it's a valid model file.
+
+#### Parameters
+- `model_url`: The URL of the model weight file, which must end with `.gguf`.
+- `token`: Security token (optional).

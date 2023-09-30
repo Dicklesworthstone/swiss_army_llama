@@ -1260,7 +1260,7 @@ async def get_all_stored_documents(req: Request, token: str = None) -> AllDocume
 2. Must be larger than 100 MB to ensure it's a valid model file.
 
 ### Parameters:
-- `model_url`: The URL of the model weight file, which must end with `.gguf`.
+- `model_url`: The URL of the model weight file, which must end with `.gguf`. For example: `https://huggingface.co/kirp/TinyLlama-1.1B-Chat-v0.2-gguf/blob/main/ggml-model-q5_k_m.gguf`
 - `token`: Security token (optional).
 
 ### Response:
