@@ -651,14 +651,21 @@ async def get_or_compute_transcript(file: UploadFile, compute_embeddings_for_res
     
 # Core embedding functions start here:    
 
-def download_models() -> List[str]:
-    list_of_model_download_urls = [
-        'https://huggingface.co/TheBloke/Yarn-Llama-2-13B-128K-GGUF/resolve/main/yarn-llama-2-13b-128k.Q4_K_M.gguf',
-        'https://huggingface.co/TheBloke/Yarn-Llama-2-7B-128K-GGUF/resolve/main/yarn-llama-2-7b-128k.Q4_K_M.gguf',
-        'https://huggingface.co/TheBloke/openchat_v3.2_super-GGUF/resolve/main/openchat_v3.2_super.Q4_K_M.gguf',
-        'https://huggingface.co/TheBloke/Phind-CodeLlama-34B-Python-v1-GGUF/resolve/main/phind-codellama-34b-python-v1.Q4_K_M.gguf',
-        'https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.1-GGUF/resolve/main/mistral-7b-instruct-v0.1.Q6_K.gguf'
-    ]
+def download_models() -> Tuple[List[str], List[Dict[str, str]]]:
+    download_status = []    
+    json_path = os.path.join(BASE_DIRECTORY, "model_urls.json")
+    if not os.path.exists(json_path):
+        initial_model_urls = [
+            'https://huggingface.co/TheBloke/Yarn-Llama-2-13B-128K-GGUF/resolve/main/yarn-llama-2-13b-128k.Q4_K_M.gguf',
+            'https://huggingface.co/TheBloke/Yarn-Llama-2-7B-128K-GGUF/resolve/main/yarn-llama-2-7b-128k.Q4_K_M.gguf',
+            'https://huggingface.co/TheBloke/openchat_v3.2_super-GGUF/resolve/main/openchat_v3.2_super.Q4_K_M.gguf',
+            'https://huggingface.co/TheBloke/Phind-CodeLlama-34B-Python-v1-GGUF/resolve/main/phind-codellama-34b-python-v1.Q4_K_M.gguf',
+            'https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.1-GGUF/resolve/main/mistral-7b-instruct-v0.1.Q6_K.gguf'
+        ]
+        with open(json_path, "w") as f:
+            json.dump(initial_model_urls, f)
+    with open(json_path, "r") as f:
+        list_of_model_download_urls = json.load(f)
     model_names = [os.path.basename(url) for url in list_of_model_download_urls]
     current_file_path = os.path.abspath(__file__)
     base_dir = os.path.dirname(current_file_path)
@@ -666,28 +673,55 @@ def download_models() -> List[str]:
     logger.info("Checking models directory...")
     if USE_RAMDISK:
         ramdisk_models_dir = os.path.join(RAMDISK_PATH, 'models')
-        if not os.path.exists(RAMDISK_PATH): # Check if RAM disk exists, and set it up if not
+        if not os.path.exists(RAMDISK_PATH):
             setup_ramdisk()
-        if all(os.path.exists(os.path.join(ramdisk_models_dir, llm_model_name)) for llm_model_name in model_names): # Check if models already exist in RAM disk
+        if all(os.path.exists(os.path.join(ramdisk_models_dir, llm_model_name)) for llm_model_name in model_names):
             logger.info("Models found in RAM Disk.")
-            return model_names
-    if not os.path.exists(models_dir): # Check if models directory exists, and create it if not
+            for url in list_of_model_download_urls:
+                download_status.append({"url": url, "status": "success", "message": "Model found in RAM Disk."})
+            return model_names, download_status
+    if not os.path.exists(models_dir):
         os.makedirs(models_dir)
         logger.info(f"Created models directory: {models_dir}")
     else:
         logger.info(f"Models directory exists: {models_dir}")
-    for url, model_name_with_extension in zip(list_of_model_download_urls, model_names): # Check if models are in regular disk, download if not
+    for url, model_name_with_extension in zip(list_of_model_download_urls, model_names):
+        status = {"url": url, "status": "success", "message": "File already exists."}
         filename = os.path.join(models_dir, model_name_with_extension)
         if not os.path.exists(filename):
             logger.info(f"Downloading model {model_name_with_extension} from {url}...")
             urllib.request.urlretrieve(url, filename)
-            logger.info(f"Downloaded: {filename}")
+            file_size = os.path.getsize(filename) / (1024 * 1024)  # Convert bytes to MB
+            if file_size < 100:
+                os.remove(filename)
+                status["status"] = "failure"
+                status["message"] = "Downloaded file is too small, probably not a valid model file."
+            else:
+                logger.info(f"Downloaded: {filename}")     
         else:
-            logger.info(f"File already exists: {filename}")
-    if USE_RAMDISK: # If RAM disk is enabled, copy models from regular disk to RAM disk
+            logger.info(f"File already exists: {filename}")       
+        download_status.append(status)
+    if USE_RAMDISK:
         copy_models_to_ramdisk(models_dir, ramdisk_models_dir)
     logger.info("Model downloads completed.")
-    return model_names
+    return model_names, download_status
+
+def add_model_url(new_url: str) -> str:
+    corrected_url = new_url
+    if '/blob/main/' in new_url:
+        corrected_url = new_url.replace('/blob/main/', '/resolve/main/')
+    json_path = os.path.join(BASE_DIRECTORY, "model_urls.json")
+    with open(json_path, "r") as f:
+        existing_urls = json.load(f)
+    if corrected_url not in existing_urls:
+        logger.info(f"Model URL not found in database. Adding {new_url} now...")
+        existing_urls.append(corrected_url)
+        with open(json_path, "w") as f:
+            json.dump(existing_urls, f)
+        logger.info(f"Model URL added: {new_url}")
+    else:
+        logger.info("Model URL already exists.")        
+    return corrected_url  
 
 async def get_embedding_from_db(text: str, llm_model_name: str):
     text_hash = sha3_256(text.encode('utf-8')).hexdigest() # Compute the hash
@@ -1059,6 +1093,7 @@ async def generate_completion_from_llm(request: TextCompletionRequest, req: Requ
     logger.info(f"Starting text completion calculation using model: '{request.llm_model_name}'for input prompt: '{request.input_prompt}'")
     logger.info(f"Loading model: '{request.llm_model_name}'")
     llm = load_text_completion_model(request.llm_model_name)
+    logger.info(f"Done loading model: '{request.llm_model_name}'")
     list_of_llm_outputs = []
     if request.grammar_file_string != "":
         list_of_grammar_files = glob.glob("./grammar_files/*.gbnf")
@@ -1214,6 +1249,49 @@ async def get_all_stored_documents(req: Request, token: str = None) -> AllDocume
         logger.error(f"An error occurred while processing the request: {e}")
         logger.error(traceback.format_exc())  # Print the traceback
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
+
+@app.post("/add_new_model/",
+        summary="Add New Model by URL",
+        description="""Submit a new model URL for download and use. The model must satisfy the following criteria:
+
+1. Must be in `.gguf` format.
+2. Must be larger than 100 MB to ensure it's a valid model file.
+
+### Parameters:
+- `model_url`: The URL of the model weight file, which must end with `.gguf`.
+- `token`: Security token (optional).
+
+### Response:
+The response will include a JSON object indicating whether the model was successfully added and downloaded. Possible status values are:
+
+- `success`: Model was added and downloaded successfully.
+- `failure`: Model download failed, likely because it's not a valid model file.
+- `error`: The URL did not point to a `.gguf` file.
+- `unknown`: An unexpected error occurred.
+
+### Example Response:
+```json
+{
+    "status": "success",
+    "message": "Model added and downloaded successfully."
+}
+```
+""",
+        response_description="A JSON object indicating the status of the model addition and download.")
+async def add_new_model(model_url: str, token: str = None) -> Dict[str, Any]:
+    if USE_SECURITY_TOKEN and (token is None or token != SECURITY_TOKEN):
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    decoded_model_url = unquote(model_url)
+    if not decoded_model_url.endswith('.gguf'):
+        return {"status": "error", "message": "Model URL must point to a .gguf file."}
+    corrected_model_url = add_model_url(decoded_model_url)
+    _, download_status = download_models()
+    status_dict = {status["url"]: status for status in download_status}
+    if corrected_model_url in status_dict:
+        return {"status": status_dict[corrected_model_url]["status"], "message": status_dict[corrected_model_url]["message"]}
+    return {"status": "unknown", "message": "Unexpected error."}
 
 
 
@@ -1869,7 +1947,7 @@ async def startup_event():
         USE_RAMDISK = False
     elif USE_RAMDISK:
         setup_ramdisk()    
-    list_of_downloaded_model_names = download_models()
+    list_of_downloaded_model_names, download_status = download_models()
     for llm_model_name in list_of_downloaded_model_names:
         try:
             load_model(llm_model_name, raise_http_exception=False)
