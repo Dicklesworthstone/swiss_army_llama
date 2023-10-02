@@ -1,7 +1,7 @@
 # 🇨🇭🎖️🦙 Swiss Army Llama
 
 <div align="center">
-  <img src="https://github.com/Dicklesworthstone/swiss_army_llama/raw/main/swiss_army_llama_logo.webp" width="500">
+  <img src="https://github.com/Dicklesworthstone/swiss_army_llama/raw/main/image_files/swiss_army_llama_logo.webp" width="500">
 </div>
 
 ## Introduction
@@ -17,8 +17,8 @@ In addition to fixed-sized embedding vectors, we also expose functionality that 
 Finally, we add a new endpoint for generating multiple text completions for a given input prompt, with the ability to specify a grammar file that will enforce a particular form of response, such as JSON. There is also a useful new utility feature: a real-time application log viewer that can be accessed via a web browser, which allows for syntax highlighting and offers options for downloading the logs or copying them to the clipboard. This allows a user to watch the logs without having direct SSH access to the server.
 
 ## Screenshots
-![Swiss Army Llama Swagger UI](https://github.com/Dicklesworthstone/swiss_army_llama/raw/main/swiss_army_llama__swagger_screenshot.png)
-![Swiss Army Llama Runnig](https://github.com/Dicklesworthstone/swiss_army_llama/raw/main/swiss_army_llama__swagger_screenshot_running.png)
+![Swiss Army Llama Swagger UI](https://github.com/Dicklesworthstone/swiss_army_llama/raw/main/image_files/swiss_army_llama__swagger_screenshot.png)
+![Swiss Army Llama Runnig](https://github.com/Dicklesworthstone/swiss_army_llama/raw/main/image_files/swiss_army_llama__swagger_screenshot_running.png)
 
 *TLDR:* If you just want to try it very quickly on a fresh Ubuntu 22+ machine (warning, this will install docker using apt):
 
@@ -158,8 +158,8 @@ This project is licensed under the MIT License.
 
 ## Some Llama Knife Images I found on Google
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Dicklesworthstone/swiss_army_llama/main/llama_knife_sticker.webp" width="500" style="margin-right: 10px;">
-  <img src="https://raw.githubusercontent.com/Dicklesworthstone/swiss_army_llama/main/llama_knife_sticker2.jpg" width="500">
+  <img src="https://raw.githubusercontent.com/Dicklesworthstone/swiss_army_llama/main/image_files/llama_knife_sticker.webp" width="500" style="margin-right: 10px;">
+  <img src="https://raw.githubusercontent.com/Dicklesworthstone/swiss_army_llama/main/image_files/llama_knife_sticker2.jpg" width="500">
 </p>
 
 ---
