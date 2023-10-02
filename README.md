@@ -33,7 +33,9 @@ To run it natively (not using Docker) in a Python venv (recommended!), you can u
 
 ```bash
 sudo apt-get update
-sudo apt-get install libxml2-dev libxslt1-dev antiword unrtf poppler-utils pstotext tesseract-ocr flac ffmpeg lame libmad0 libsox-fmt-mp3 sox libjpeg-dev swig -y
+sudo apt-get install libxml2-dev libxslt1-dev antiword unrtf poppler-utils pstotext tesseract-ocr flac ffmpeg lame libmad0 libsox-fmt-mp3 sox libjpeg-dev swig redis-server -y
+sudo systemctl enable redis-server
+sudo systemctl start redis
 git clone https://github.com/Dicklesworthstone/swiss_army_llama
 cd swiss_army_llama
 python3 -m venv venv
@@ -71,6 +73,7 @@ Watch the the automated setup process in action [here](https://asciinema.org/a/6
 15. **Support for Multiple Models and Measures**: Accommodates multiple embedding models and similarity measures, allowing flexibility and customization based on user needs.
 16. **Ability to Generate Multiple Completions using Specified Grammar**: Get back structured LLM completions for a specified input prompt.
 17. **Real-Time Log File Viewer in Browser**: Lets anyone with access to the API server conveniently watch the application logs to gain insight into the execution of their requests.
+18. **Uses Redis for Request Locking**: Uses Redis to allow for multiple Uvicorn workers to run in parallel without conflicting with each other.
 
 ## Demo Screen Recording in Action
 [Here](https://asciinema.org/a/39dZ8vv9nkcNygasUl35wnBPq) is the live console output while I interact with it from the Swagger page to make requests.

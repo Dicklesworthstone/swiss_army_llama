@@ -7,7 +7,7 @@ ENV PYTHONUNBUFFERED=1
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies, including sudo
+# Install system dependencies, including Redis and sudo
 RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
@@ -26,7 +26,8 @@ RUN apt-get update && apt-get install -y \
     sox \
     libjpeg-dev\
     swig \
-    curl \    
+    curl \
+    redis-server \
     sudo && \
     rm -rf /var/lib/apt/lists/*
 
@@ -48,8 +49,8 @@ COPY .env .
 # Copy the rest of the application
 COPY . .
 
-# Expose the port the app runs on
-EXPOSE 8089
+# Expose the port the app runs on and Redis default port
+EXPOSE 8089 6379
 
-# Command to run the application
-CMD ["python3", "swiss_army_llama.py"]
+# Command to run Redis in the background and then the application
+CMD redis-server & python3 swiss_army_llama.py
