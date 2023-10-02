@@ -109,6 +109,7 @@ fast_vector_similarity
 faster-whisper
 textract
 pytz
+uvloop
 ```
 
 ## Running the Application
@@ -137,6 +138,7 @@ You can configure the service easily by editing the included `.env` file. Here's
 - `DEFAULT_MODEL_NAME`: Default model name to use. (e.g., `yarn-llama-2-13b-128k`)
 - `LLM_CONTEXT_SIZE_IN_TOKENS`: Context size in tokens for LLM. (e.g., `512`)
 - `SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT`: Port number for the service. (e.g., `8089`)
+- `UVICORN_NUMBER_OF_WORKERS`: Number of workers for Uvicorn. (e.g., `2`)
 - `MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING`: Minimum string length for document embedding. (e.g., `15`)
 - `MAX_RETRIES`: Maximum retries for locked database. (e.g., `10`)
 - `DB_WRITE_BATCH_SIZE`: Database write batch size. (e.g., `25`)

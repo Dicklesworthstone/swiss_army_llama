@@ -48,7 +48,6 @@ def highlight_rules_func(text):
     text = text.replace('#COLOR13_OPEN#', '<span style="color: #f2ebd3;">').replace('#COLOR13_CLOSE#', '</span>')
     return text
 
-
 def show_logs_incremental_func(minutes: int, last_position: int):
     new_logs = []
     now = datetime.now(timezone('UTC'))  # get current time, make it timezone-aware
@@ -75,21 +74,22 @@ def show_logs_incremental_func(minutes: int, last_position: int):
 
 
 def show_logs_func(minutes: int = 5):
-    # read the entire log file and generate HTML with logs up to `minutes` minutes from now
     with open(log_file_path, "r") as f:
         lines = f.readlines()
     logs = []
-    now = datetime.now(timezone('UTC'))  # get current time, make it timezone-aware
+    now = datetime.now(timezone('UTC'))
     for line in lines:
         if line.strip() == "":
             continue
-        if line[0].isdigit():
-            log_datetime_str = line.split(" - ")[0]  # assuming the datetime is at the start of each line
-            log_datetime = datetime.strptime(log_datetime_str, "%Y-%m-%d %H:%M:%S,%f")  # parse the datetime string to a datetime object
-            log_datetime = log_datetime.replace(tzinfo=timezone('UTC'))  # set the datetime object timezone to UTC to match `now`
-            if now - log_datetime <= timedelta(minutes=minutes):  # if the log is within `minutes` minutes from now
-                logs.append(highlight_rules_func(line.rstrip('\n')))  # add the highlighted log to the list and strip any newline at the end
-    logs_as_string = "<br>".join(logs)  # joining with <br> directly
+        try:
+            log_datetime_str = line.split(" - ")[0]
+            log_datetime = datetime.strptime(log_datetime_str, "%Y-%m-%d %H:%M:%S,%f")
+            log_datetime = log_datetime.replace(tzinfo=timezone('UTC'))
+            if now - log_datetime <= timedelta(minutes=minutes):
+                logs.append(highlight_rules_func(line.rstrip('\n')))
+        except (ValueError, IndexError):
+            logs.append(highlight_rules_func(line.rstrip('\n')))  # Line didn't meet datetime parsing criteria, continue with processing
+    logs_as_string = "<br>".join(logs)
     logs_as_string_newlines_rendered = logs_as_string.replace("\n", "<br>")
     logs_as_string_newlines_rendered_font_specified = """
     <html>

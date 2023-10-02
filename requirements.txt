@@ -19,3 +19,6 @@ faster-whisper
 textract
 pytest
 pytz
+uvloop
+aioredis
+aioredlock
