@@ -616,7 +616,7 @@ async def generate_completion_from_llm(request: TextCompletionRequest, req: Requ
         list_of_responses.append(response)
     return list_of_responses
 
-def validate_bnf_grammar_revised(grammar):
+def validate_bnf_grammar_func(grammar):
     defined_rules, used_rules = set(), set()
     for line in grammar.strip().split('\n'):
         if '::=' not in line: 

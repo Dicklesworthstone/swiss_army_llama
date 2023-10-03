@@ -5,11 +5,11 @@ from database_functions import AsyncSessionLocal, DatabaseWriter, get_db_writer
 from ramdisk_functions import clear_ramdisk
 from misc_utility_functions import  build_faiss_indexes, safe_path
 from embeddings_data_models import DocumentEmbedding, TokenLevelEmbeddingBundle
-from embeddings_data_models import EmbeddingRequest, SemanticSearchRequest, AdvancedSemanticSearchRequest, SimilarityRequest, TextCompletionRequest, GrammarBuilderRequest, AddGrammarRequest
-from embeddings_data_models import EmbeddingResponse, SemanticSearchResponse, AdvancedSemanticSearchResponse, SimilarityResponse, AllStringsResponse, AllDocumentsResponse, TextCompletionResponse, GrammarBuilderResponse, AddGrammarResponse
+from embeddings_data_models import EmbeddingRequest, SemanticSearchRequest, AdvancedSemanticSearchRequest, SimilarityRequest, TextCompletionRequest, AddGrammarRequest
+from embeddings_data_models import EmbeddingResponse, SemanticSearchResponse, AdvancedSemanticSearchResponse, SimilarityResponse, AllStringsResponse, AllDocumentsResponse, TextCompletionResponse, AddGrammarResponse
 from embeddings_data_models import ShowLogsIncrementalModel
 from service_functions import get_or_compute_embedding, get_or_compute_transcript, add_model_url, get_or_compute_token_level_embedding_bundle_combined_feature_vector, calculate_token_level_embeddings
-from service_functions import parse_submitted_document_file_into_sentence_strings_func, compute_embeddings_for_document, store_document_embeddings_in_db, generate_completion_from_llm, validate_bnf_grammar
+from service_functions import parse_submitted_document_file_into_sentence_strings_func, compute_embeddings_for_document, store_document_embeddings_in_db, generate_completion_from_llm, validate_bnf_grammar_func
 from grammar_builder import GrammarBuilder
 from log_viewer_functions import show_logs_incremental_func, show_logs_func
 from uvicorn_config import option
@@ -31,7 +31,7 @@ from decouple import config
 import uvicorn
 import fastapi
 from fastapi.param_functions import Body
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Depends
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Depends, Form
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, Response
 from sqlalchemy import select
 from sqlalchemy import text as sql_text
@@ -113,6 +113,25 @@ async def get_list_of_available_model_names(token: str = None) -> Dict[str, List
     model_files = glob.glob(os.path.join(models_dir, "*.bin")) +  glob.glob(os.path.join(models_dir, "*.gguf"))# Find all files with .bin or .gguf extension
     model_names = [os.path.splitext(os.path.splitext(os.path.basename(model_file))[0])[0] for model_file in model_files] # Remove both extensions
     return {"model_names": model_names}
+
+
+
+@app.get("/get_list_of_available_bnf_grammars",
+        response_model=List[str],
+        summary="Get Available BNF Grammars",
+        description="Returns a list of all the valid .gbnf files in the grammar_files directory.",
+        response_description="A list containing the names of all valid .gbnf files.")
+async def get_list_of_available_bnf_grammars(token: str = None) -> List[str]:
+    if USE_SECURITY_TOKEN and (token is None or token != SECURITY_TOKEN):
+        raise HTTPException(status_code=403, detail="Unauthorized")    
+    try:
+        grammar_files_dir = 'grammar_files'
+        if not os.path.exists(grammar_files_dir):
+            os.makedirs(grammar_files_dir)
+        valid_files = [f for f in os.listdir(grammar_files_dir) if f.endswith('.gbnf')]
+        return valid_files
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred: {e}")
 
 
 
@@ -898,42 +917,55 @@ async def get_text_completions_from_input_prompt(request: TextCompletionRequest,
 
 
 @app.post("/turn_sample_json_into_bnf_grammar_for_llm/",
-        response_model=GrammarBuilderResponse,
         summary="Generate BNF Grammar from Sample JSON",
-        description="""Generate BNF grammar from a sample JSON file or text. 
+        description="""Generate BNF grammar based on a sample JSON string or an uploaded JSON file, with optional token-based authentication.
 ### Parameters:
-- `sample_json`: The sample JSON data as a dictionary (optional if file is uploaded).
-- `file`: The sample JSON file to upload (optional if JSON data is provided in `sample_json`).
+- `sample_json`: The sample JSON data as a string (optional if file is uploaded).
+- `file`: The sample JSON file to upload (optional if JSON data is provided as `sample_json`). File must be JSON type and not exceed 100KB.
+- `token`: A security token for authentication (optional).
+
+### Constraints:
+- Uploaded files must be of type JSON and not exceed 100KB.
+
+### Validation:
+- The generated BNF grammar will be validated. If validation fails, an error message will be returned.
 
 ### Example Request with JSON Data:
-```json
-{
-    "sample_json": {"name": "John", "age": 30, "is_alive": true}
-}
-```
+Use `multipart/form-data` to provide `sample_json` as a string.
 
 ### Example Request with File Upload:
 Use `multipart/form-data` to upload a JSON file.
 
+### Example Request with Token:
+Add a `token` parameter to your request for authentication.
+
 ### Response:
-The response will include the generated BNF grammar based on the sample JSON provided.
+The response will be the generated BNF grammar based on the sample JSON provided. If the generated BNF grammar fails validation, an error message will be returned.
 
 ### Example Response:
-```json
-{
-    "bnf_grammar": "root ::= '{' ws root_pair_list ws '}' ws ..."
-}
-```""",
-        response_description="A JSON object containing the generated BNF grammar.")
+"root ::= '{' ws root_pair_list ws '}' ws ..."
+""",
+        response_description="A string containing the generated BNF grammar, or an error message if the grammar fails validation.")
 async def turn_sample_json_into_bnf_grammar_for_llm(
-    sample_json: GrammarBuilderRequest = Body(None, embed=True),
-    file: UploadFile = File(None)
-) -> GrammarBuilderResponse:
+    sample_json: str = Form(None),
+    file: UploadFile = File(None),
+    token: str = Form(None)
+) -> str:
     if sample_json is None and file is None:
         raise HTTPException(status_code=400, detail="Either sample_json or file must be provided")
+    if file:
+        if file.content_type != "application/json":
+            raise HTTPException(status_code=400, detail="Invalid file type. Only JSON is accepted.")
+        file_size = file.file._file.tell()
+        if file_size > 102400:
+            raise HTTPException(status_code=400, detail="File size exceeds 100KB.")
     gb = GrammarBuilder()
     if sample_json:
-        bnf_grammar = gb.json_to_bnf(json.dumps(sample_json.sample_json))
+        try:
+            json_content = json.loads(sample_json)
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+        bnf_grammar = gb.json_to_bnf(json.dumps(json_content))
     else:
         file_content = await file.read()
         try:
@@ -941,43 +973,50 @@ async def turn_sample_json_into_bnf_grammar_for_llm(
         except json.JSONDecodeError as e:
             raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
         bnf_grammar = gb.json_to_bnf(json.dumps(json_content))
-    return {"bnf_grammar": bnf_grammar}
+    is_valid_grammar, validation_message = validate_bnf_grammar_func(bnf_grammar)
+    if not is_valid_grammar:
+        raise HTTPException(status_code=400, detail=f"Generated BNF grammar could not be validated: {validation_message}")
+    return bnf_grammar
 
 
 
 @app.post("/turn_pydantic_model_description_into_bnf_grammar_for_llm/",
-        response_model=GrammarBuilderResponse,
         summary="Generate BNF Grammar from Pydantic Model Description",
-        description="""Generate BNF grammar based on a Pydantic model description string.
+        description="""Generate BNF grammar based on a Pydantic model description string. This endpoint allows you to turn a Pydantic model definition into a corresponding BNF grammar.
+        
 ### Parameters:
-- `pydantic_model_description`: The Pydantic model description as a string. Must include the fields and their types.
+- `pydantic_model_description`: The Pydantic model description as a string. Must include the class definition, fields, and their types.
+
+### Validation:
+- The generated BNF grammar will be validated. If validation fails, an error message will be returned.
+
+### Authentication:
+- `token`: Security token for authorized access (optional if security is disabled).
 
 ### Example Request:
-```json
-{
-    "pydantic_model_description": "class Model(BaseModel):\\n    name: str\\n    age: int\\n    is_alive: bool"
-}
-```
+Use `multipart/form-data` to provide `pydantic_model_description` as a string.
 
 ### Response:
-The response will include the generated BNF grammar based on the Pydantic model description provided.
+The response will be the generated BNF grammar based on the Pydantic model description provided. If the generated BNF grammar fails validation, an error message will be returned.
 
 ### Example Response:
-```json
-{
-    "bnf_grammar": "root ::= '{' ws root_pair_list ws '}' ws ..."
-}
-```""",
-        response_description="A JSON object containing the generated BNF grammar.")
-async def turn_pydantic_model_into_bnf_grammar_for_llm(
-    request: GrammarBuilderRequest = Body(...)
-) -> GrammarBuilderResponse:
-    if not request.pydantic_model_description:
+"root ::= '{' ws root_pair_list ws '}' ws ..."
+""",
+        response_description="A string containing the generated BNF grammar, or an error message if the grammar fails validation.")
+async def turn_pydantic_model_description_into_bnf_grammar_for_llm(
+    pydantic_model_description: str = Form(...),
+    token: str = Form(None)
+) -> str:
+    if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
+        raise HTTPException(status_code=403, detail="Unauthorized")        
+    if not pydantic_model_description:
         raise HTTPException(status_code=400, detail="Pydantic model description must be provided")
-    
     gb = GrammarBuilder()
-    bnf_grammar = gb.pydantic_to_json_bnf(request.pydantic_model_description)
-    return {"bnf_grammar": bnf_grammar}
+    bnf_grammar = gb.pydantic_to_json_bnf(pydantic_model_description)
+    is_valid_grammar, validation_message = validate_bnf_grammar_func(bnf_grammar)
+    if not is_valid_grammar:
+        raise HTTPException(status_code=400, detail=f"Generated BNF grammar could not be validated: {validation_message}")
+    return bnf_grammar
 
 
 
@@ -987,13 +1026,22 @@ async def turn_pydantic_model_into_bnf_grammar_for_llm(
 
 ### Parameters:
 - `file`: The uploaded audio file.
-- `compute_embeddings_for_resulting_transcript_document`: Boolean to indicate if document embeddings should be computed (optional, defaults to False).
+- `compute_embeddings_for_resulting_transcript_document`: Boolean to indicate if document embeddings should be computed (optional, defaults to True).
 - `llm_model_name`: The language model used for computing embeddings (optional, defaults to the default model name).
 - `req`: HTTP Request object for additional request metadata (optional).
+- `token`: Security token for API access (optional).
+- `client_ip`: Client IP for logging and security (optional).
 
 ### Examples:
 - Audio File: Submit an audio file for transcription.
-- Audio File with Embeddings: Submit an audio file and set `compute_embeddings_for_resulting_transcript_document` to True to also get embeddings.""",
+- Audio File with Embeddings: Submit an audio file and set `compute_embeddings_for_resulting_transcript_document` to True to also get embeddings.
+
+### Authentication:
+- If security tokens are enabled (`USE_SECURITY_TOKEN=True` and `use_hardcoded_security_token=True`), then the `token` parameter must match the hardcoded `SECURITY_TOKEN`.
+
+### Error Handling:
+- Unauthorized requests are logged and result in a 403 status.
+- All other errors result in a 500 status and are logged with their tracebacks.""",
         response_description="A JSON object containing the complete transcription details, computational times, and an optional URL for downloading a ZIP file of the document embeddings.")
 async def compute_transcript_with_whisper_from_audio(
         file: UploadFile, 
@@ -1017,11 +1065,14 @@ async def compute_transcript_with_whisper_from_audio(
 
 @app.post("/add_new_grammar_definition_file/",
         response_model=AddGrammarResponse,
-        summary="Add a New Grammar Definition File",
-        description="""Add a new BNF grammar definition file.
+        summary="Add or Update a Grammar Definition File",
+        description="""Add a new BNF grammar definition file or update an existing one.
+        
 ### Parameters:
 - `bnf_grammar`: The BNF grammar string.
-- `grammar_file_name`: The name for the new grammar file.
+- `grammar_file_name`: The name for the new or existing grammar file.
+
+If a grammar file with the given name already exists, this endpoint will compare the existing content with the new submission. If the content is different, the file will be overwritten.
 
 ### Example Request:
 ```json
@@ -1041,17 +1092,35 @@ The response will include a list of all valid grammar files in the `grammar_file
 }
 ```""",
         response_description="A JSON object containing a list of all valid grammar files.")
-async def add_new_grammar_definition_file(request: AddGrammarRequest) -> AddGrammarResponse:
-    if not validate_bnf_grammar(request.bnf_grammar):
-        raise HTTPException(status_code=400, detail="Invalid BNF grammar")
-    
-    grammar_file_path = Path("grammar_files") / f"{request.grammar_file_name}.gbnf"
-    with open(grammar_file_path, "w") as f:
-        f.write(request.bnf_grammar)
-    
-    valid_grammar_files = [f.name for f in Path("grammar_files").glob("*.gbnf")]
-    
+async def add_new_grammar_definition_file(request: AddGrammarRequest, token: str = None) -> AddGrammarResponse:
+    if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
+        raise HTTPException(status_code=403, detail="Unauthorized")    
+    is_valid_grammar, validation_message = validate_bnf_grammar_func(request.bnf_grammar)
+    if not is_valid_grammar:
+        raise HTTPException(status_code=400, detail=f"Invalid BNF grammar: {validation_message}")
+    grammar_files_dir = 'grammar_files'
+    if not os.path.exists(grammar_files_dir):
+        os.makedirs(grammar_files_dir)
+    grammar_file_name_with_extension = f"{request.grammar_file_name}.gbnf"
+    grammar_file_path = Path(grammar_files_dir) / grammar_file_name_with_extension
+    existing_files = await get_list_of_available_bnf_grammars()
+    if grammar_file_name_with_extension in existing_files:
+        with open(grammar_file_path, "r") as f:
+            existing_content = f.read()
+        if existing_content != request.bnf_grammar:
+            logger.info(f"Grammar file {grammar_file_name_with_extension} already exists, but newly submitted grammar is different-- overwriting!")
+            with open(grammar_file_path, "w") as f:
+                f.write(request.bnf_grammar)
+        else:
+            logger.info(f"Grammar file {grammar_file_name_with_extension} already exists and is the same-- not overwriting!")
+    else:
+        logger.info(f"Grammar file {grammar_file_name_with_extension} does not exist-- creating!")
+        with open(grammar_file_path, "w") as f:
+            f.write(request.bnf_grammar)
+    valid_grammar_files = [f.name for f in Path(grammar_files_dir).glob("*.gbnf")]
     return {"valid_grammar_files": valid_grammar_files}
+
+
 
 @app.post("/clear_ramdisk/")
 async def clear_ramdisk_endpoint(token: str = None):
@@ -1063,13 +1132,26 @@ async def clear_ramdisk_endpoint(token: str = None):
     return {"message": "RAM Disk usage is disabled."}
 
 
-@app.on_event("startup")
-async def startup_event():
-    await initialize_globals()
 
+@app.get("/download/{file_name}",
+        summary="Download File by Name",
+        description="""Download a file by its name from the 'generated_transcript_embeddings_zip_files' directory, with optional token-based authentication.
+### Parameters:
+- `file_name`: The name of the file to download.
+- `token`: A security token for authentication (optional).
 
-@app.get("/download/{file_name}")
-async def download_file(file_name: str):
+### Example Request with Token:
+Add a `token` parameter to your request for authentication.
+
+### Response:
+The response will be the requested file in ZIP format if it exists, or a 404 status code if the file is not found.
+
+### Security:
+If a security token is required by the application configuration, you must provide a valid `token` to access this endpoint. Unauthorized access will result in a 403 status code.""",
+        response_description="The ZIP file that was requested, or a status code indicating an error.")
+async def download_file(file_name: str, token: str = None):
+    if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
+        raise HTTPException(status_code=403, detail="Unauthorized")    
     decoded_file_name = unquote(file_name)
     file_path = os.path.join("generated_transcript_embeddings_zip_files", decoded_file_name)
     absolute_file_path = os.path.abspath(file_path)
@@ -1083,18 +1165,46 @@ async def download_file(file_name: str):
         raise HTTPException(status_code=404, detail="File not found")
     
 
+
 @app.get("/show_logs_incremental/{minutes}/{last_position}", response_model=ShowLogsIncrementalModel)
 def show_logs_incremental(minutes: int, last_position: int):
     return show_logs_incremental_func(minutes, last_position)
 
+
+
 @app.get("/show_logs/{minutes}", response_class=HTMLResponse)
 def show_logs(minutes: int = 5):
     return show_logs_func(minutes)
+
+
+
         
-@app.get("/show_logs", response_class=HTMLResponse)
+@app.get("/show_logs",
+        response_class=HTMLResponse,
+        summary="Show Recent Logs",
+        description="""Displays the most recent logs from the 'swiss_army_llama.log' file, highlighting key words and patterns for easier readability. The logs are displayed as HTML content with inline styles and Javascript for dynamic refreshing.
+        
+### Behavior:
+- By default, shows logs from the last 5 minutes.
+- Log entries are color-coded based on keywords like 'success', 'error', 'pending', etc.
+- Log entries are continuously fetched every 20 seconds.
+- Provides options to copy and download the logs.
+
+### Response:
+The response will be an HTML page that displays the logs in a human-readable format, highlighting various types of information.
+
+### Additional Features:
+- Users can copy or download the logs using buttons provided on the page.""",
+        response_description="An HTML page containing the most recent logs with dynamic updating and interactive features.")
 def show_logs_default():
     return show_logs_func(5)
+
+
+
+@app.on_event("startup")
+async def startup_event():
+    await initialize_globals()
     
-    
+        
 if __name__ == "__main__":
     uvicorn.run("swiss_army_llama:app", **option)

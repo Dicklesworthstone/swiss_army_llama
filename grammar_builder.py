@@ -1,3 +1,4 @@
+from service_functions import validate_bnf_grammar_func
 from typing import List, Dict
 import json
 
@@ -196,10 +197,15 @@ if use_grammarbuilder_demo:
     }
     }
     '''
-
+    print('\n' + '_' * 80 + '\n')
     bnf_grammar = gb.json_to_bnf(sample_json)
     print(bnf_grammar)
     print('\n' + '_' * 80 + '\n')
+    print("Validating grammar...")
+    is_valid, validation_message = validate_bnf_grammar_func(bnf_grammar)
+    print(validation_message)
+
+    print('\n\n\n')
 
     gb = GrammarBuilder()
     sample_pydantic_model_description = '''
@@ -220,4 +226,8 @@ if use_grammarbuilder_demo:
     
     bnf_grammar = gb.pydantic_to_json_bnf(sample_pydantic_model_description)
     print(bnf_grammar)
+    print('\n' + '_' * 80 + '\n')
+    print("Validating grammar...")
+    is_valid, validation_message = validate_bnf_grammar_func(bnf_grammar)
+    print(validation_message)
 

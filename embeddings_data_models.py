@@ -231,13 +231,6 @@ class ShowLogsIncrementalModel(BaseModel):
     logs: str
     last_position: int
 
-class GrammarBuilderRequest(BaseModel):
-    sample_json: Optional[dict]
-    pydantic_model_description: Optional[str]
-
-class GrammarBuilderResponse(BaseModel):
-    bnf_grammar: str
-
 class AddGrammarRequest(BaseModel):
     bnf_grammar: str
     grammar_file_name: str
