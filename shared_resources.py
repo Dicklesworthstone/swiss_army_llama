@@ -41,7 +41,7 @@ async def initialize_globals():
         subprocess.Popen(['redis-server'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         await asyncio.sleep(1)  # Sleep for 1 second to give Redis time to start        
     redis = await aioredis.create_redis_pool('redis://localhost')
-    lock_manager = Aioredlock([redis])
+    lock_manager = Aioredlock([redis], lock_timeout=20000)  # 20 second timeout to acquire a lock
     await initialize_db()
     queue = asyncio.Queue()
     db_writer = DatabaseWriter(queue)
