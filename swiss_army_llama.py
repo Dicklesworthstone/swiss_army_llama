@@ -3,7 +3,7 @@ from shared_resources import initialize_globals, download_models
 from logger_config import setup_logger
 from database_functions import AsyncSessionLocal, DatabaseWriter, get_db_writer
 from ramdisk_functions import clear_ramdisk
-from misc_utility_functions import  build_faiss_indexes
+from misc_utility_functions import  build_faiss_indexes, safe_path
 from embeddings_data_models import DocumentEmbedding, TokenLevelEmbeddingBundle
 from embeddings_data_models import EmbeddingRequest, SemanticSearchRequest, AdvancedSemanticSearchRequest, SimilarityRequest, TextCompletionRequest
 from embeddings_data_models import EmbeddingResponse, SemanticSearchResponse, AdvancedSemanticSearchResponse, SimilarityResponse, AllStringsResponse, AllDocumentsResponse, TextCompletionResponse
@@ -420,14 +420,18 @@ async def get_token_level_embeddings_matrix_and_combined_feature_vector_for_stri
                     return JSONResponse(content=response_content)
                 else: # Assume 'zip' file should be sent back
                     output_file_name_without_extension = f"token_level_embeddings_and_combined_feature_vector_for_input_hash_{input_text_hash}_and_model_name__{request.llm_model_name}"
-                    json_file_path = f"/tmp/{output_file_name_without_extension}.json"
-                    with open(json_file_path, 'w') as json_file:
-                        json.dump(response_content, json_file)
-                    zip_file_path = f"/tmp/{output_file_name_without_extension}.zip"
-                    with zipfile.ZipFile(zip_file_path, 'w') as zipf:
-                        zipf.write(json_file_path, os.path.basename(json_file_path))
-                    logger.info(f"Now sending back ZIP file response for input text string {request.text} and model {request.llm_model_name}; First 100 characters of zipped JSON file out of {len(json_content)} total characters: {json_content[:100]}")                            
-                    return FileResponse(zip_file_path, headers={"Content-Disposition": f"attachment; filename={output_file_name_without_extension}.zip"})
+                    is_safe_json, safe_json_file_path = safe_path('/tmp', f"{output_file_name_without_extension}.json")
+                    is_safe_zip, safe_zip_file_path = safe_path('/tmp', f"{output_file_name_without_extension}.zip")
+                    if is_safe_json and is_safe_zip:                    
+                        with open(safe_json_file_path, 'w') as json_file:
+                            json.dump(response_content, json_file)
+                        with zipfile.ZipFile(safe_zip_file_path, 'w') as zipf:
+                            zipf.write(safe_json_file_path, os.path.basename(safe_json_file_path))
+                        logger.info(f"Now sending back ZIP file response for input text string {request.text} and model {request.llm_model_name}; First 100 characters of zipped JSON file out of {len(json_content)} total characters: {json_content[:100]}")                            
+                        return FileResponse(safe_zip_file_path, headers={"Content-Disposition": f"attachment; filename={output_file_name_without_extension}.zip"})
+                    else:
+                        logger.error("Potential path injection attack detected.")
+                        raise HTTPException(status_code=500, detail="Internal Server Error")
             except Exception as e:
                 logger.error(f"An error occurred while processing the request: {e}")
                 logger.error(traceback.format_exc())

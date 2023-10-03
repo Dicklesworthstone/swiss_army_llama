@@ -13,6 +13,11 @@ from sqlalchemy import text as sql_text
 
 logger = setup_logger()
 
+def safe_path(base_path, file_name):
+    abs_base_path = os.path.abspath(base_path)
+    abs_user_path = os.path.abspath(os.path.join(base_path, file_name))
+    return abs_user_path.startswith(abs_base_path), abs_user_path
+
 def clean_filename_for_url_func(dirty_filename: str) -> str:
     clean_filename = re.sub(r'[^\w\s]', '', dirty_filename) # Remove special characters and replace spaces with underscores
     clean_filename = clean_filename.replace(' ', '_')
@@ -27,7 +32,6 @@ def is_redis_running(host='localhost', port=6379):
         return False
     finally:
         s.close()
-
 
 async def build_faiss_indexes():
     global faiss_indexes, token_faiss_indexes, associated_texts_by_model
@@ -78,6 +82,73 @@ async def build_faiss_indexes():
     logger.info("Faiss indexes built.")
     return faiss_indexes, token_faiss_indexes, associated_texts_by_model
 
+
+def normalize_logprobs(avg_logprob, min_logprob, max_logprob):
+    range_logprob = max_logprob - min_logprob
+    return (avg_logprob - min_logprob) / range_logprob if range_logprob != 0 else 0.5
+
+def remove_pagination_breaks(text: str) -> str:
+    text = re.sub(r'-(\n)(?=[a-z])', '', text) # Remove hyphens at the end of lines when the word continues on the next line
+    text = re.sub(r'(?<=\w)(?<![.?!-]|\d)\n(?![\nA-Z])', ' ', text) # Replace line breaks that are not preceded by punctuation or list markers and not followed by an uppercase letter or another line break   
+    return text
+
+def sophisticated_sentence_splitter(text):
+    text = remove_pagination_breaks(text)
+    pattern = r'\.(?!\s*(com|net|org|io)\s)(?![0-9])'  # Split on periods that are not followed by a space and a top-level domain or a number
+    pattern += r'|[.!?]\s+'  # Split on whitespace that follows a period, question mark, or exclamation point
+    pattern += r'|\.\.\.(?=\s)'  # Split on ellipses that are followed by a space
+    sentences = re.split(pattern, text)
+    refined_sentences = []
+    temp_sentence = ""
+    for sentence in sentences:
+        if sentence is not None:
+            temp_sentence += sentence
+            if temp_sentence.count('"') % 2 == 0:  # If the number of quotes is even, then we have a complete sentence
+                refined_sentences.append(temp_sentence.strip())
+                temp_sentence = ""
+    if temp_sentence:
+        refined_sentences[-1] += temp_sentence
+    return [s.strip() for s in refined_sentences if s.strip()]
+
+def merge_transcript_segments_into_combined_text(segments):
+    if not segments:
+        return "", [], []
+    min_logprob = min(segment['avg_logprob'] for segment in segments)
+    max_logprob = max(segment['avg_logprob'] for segment in segments)
+    combined_text = ""
+    sentence_buffer = ""
+    list_of_metadata_dicts = []
+    list_of_sentences = []
+    char_count = 0
+    time_start = None
+    time_end = None
+    total_logprob = 0.0
+    segment_count = 0
+    for segment in segments:
+        if time_start is None:
+            time_start = segment['start']
+        time_end = segment['end']
+        total_logprob += segment['avg_logprob']
+        segment_count += 1
+        sentence_buffer += segment['text'] + " "
+        sentences = sophisticated_sentence_splitter(sentence_buffer)
+        for sentence in sentences:
+            combined_text += sentence.strip() + " "
+            list_of_sentences.append(sentence.strip())
+            char_count += len(sentence.strip()) + 1  # +1 for the space
+            avg_logprob = total_logprob / segment_count
+            model_confidence_score = normalize_logprobs(avg_logprob, min_logprob, max_logprob)
+            metadata = {
+                'start_char_count': char_count - len(sentence.strip()) - 1,
+                'end_char_count': char_count - 2,
+                'time_start': time_start,
+                'time_end': time_end,
+                'model_confidence_score': model_confidence_score
+            }
+            list_of_metadata_dicts.append(metadata)
+        sentence_buffer = sentences[-1] if len(sentences) % 2 != 0 else ""
+    return combined_text, list_of_metadata_dicts, list_of_sentences
+    
 class JSONAggregator:
     def __init__(self):
         self.completions = []
@@ -147,69 +218,3 @@ class FakeUploadFile:
         return self.file.seek(offset, whence)
     def tell(self) -> int:
         return self.file.tell()
-
-def normalize_logprobs(avg_logprob, min_logprob, max_logprob):
-    range_logprob = max_logprob - min_logprob
-    return (avg_logprob - min_logprob) / range_logprob if range_logprob != 0 else 0.5
-
-def remove_pagination_breaks(text: str) -> str:
-    text = re.sub(r'-(\n)(?=[a-z])', '', text) # Remove hyphens at the end of lines when the word continues on the next line
-    text = re.sub(r'(?<=\w)(?<![.?!-]|\d)\n(?![\nA-Z])', ' ', text) # Replace line breaks that are not preceded by punctuation or list markers and not followed by an uppercase letter or another line break   
-    return text
-
-def sophisticated_sentence_splitter(text):
-    text = remove_pagination_breaks(text)
-    pattern = r'\.(?!\s*(com|net|org|io)\s)(?![0-9])'  # Split on periods that are not followed by a space and a top-level domain or a number
-    pattern += r'|[.!?]\s+'  # Split on whitespace that follows a period, question mark, or exclamation point
-    pattern += r'|\.\.\.(?=\s)'  # Split on ellipses that are followed by a space
-    sentences = re.split(pattern, text)
-    refined_sentences = []
-    temp_sentence = ""
-    for sentence in sentences:
-        if sentence is not None:
-            temp_sentence += sentence
-            if temp_sentence.count('"') % 2 == 0:  # If the number of quotes is even, then we have a complete sentence
-                refined_sentences.append(temp_sentence.strip())
-                temp_sentence = ""
-    if temp_sentence:
-        refined_sentences[-1] += temp_sentence
-    return [s.strip() for s in refined_sentences if s.strip()]
-
-def merge_transcript_segments_into_combined_text(segments):
-    if not segments:
-        return "", [], []
-    min_logprob = min(segment['avg_logprob'] for segment in segments)
-    max_logprob = max(segment['avg_logprob'] for segment in segments)
-    combined_text = ""
-    sentence_buffer = ""
-    list_of_metadata_dicts = []
-    list_of_sentences = []
-    char_count = 0
-    time_start = None
-    time_end = None
-    total_logprob = 0.0
-    segment_count = 0
-    for segment in segments:
-        if time_start is None:
-            time_start = segment['start']
-        time_end = segment['end']
-        total_logprob += segment['avg_logprob']
-        segment_count += 1
-        sentence_buffer += segment['text'] + " "
-        sentences = sophisticated_sentence_splitter(sentence_buffer)
-        for sentence in sentences:
-            combined_text += sentence.strip() + " "
-            list_of_sentences.append(sentence.strip())
-            char_count += len(sentence.strip()) + 1  # +1 for the space
-            avg_logprob = total_logprob / segment_count
-            model_confidence_score = normalize_logprobs(avg_logprob, min_logprob, max_logprob)
-            metadata = {
-                'start_char_count': char_count - len(sentence.strip()) - 1,
-                'end_char_count': char_count - 2,
-                'time_start': time_start,
-                'time_end': time_end,
-                'model_confidence_score': model_confidence_score
-            }
-            list_of_metadata_dicts.append(metadata)
-        sentence_buffer = sentences[-1] if len(sentences) % 2 != 0 else ""
-    return combined_text, list_of_metadata_dicts, list_of_sentences
