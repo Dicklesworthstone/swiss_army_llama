@@ -1,4 +1,4 @@
-from misc_utility_functions import  is_redis_running, build_faiss_indexes
+from misc_utility_functions import  is_redis_running, build_faiss_indexes, suppress_stdout_stderr
 from database_functions import DatabaseWriter, initialize_db
 from ramdisk_functions import setup_ramdisk, copy_models_to_ramdisk, check_that_user_has_required_permissions_to_manage_ramdisks
 from logger_config import setup_logger
@@ -41,7 +41,8 @@ async def initialize_globals():
         subprocess.Popen(['redis-server'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         await asyncio.sleep(1)  # Sleep for 1 second to give Redis time to start        
     redis = await aioredis.create_redis_pool('redis://localhost')
-    lock_manager = Aioredlock([redis], lock_timeout=20000)  # 20 second timeout to acquire a lock
+    lock_manager = Aioredlock([redis])
+    lock_manager.default_lock_timeout = 20000  # Set lock timeout to 20 seconds
     await initialize_db()
     queue = asyncio.Queue()
     db_writer = DatabaseWriter(queue)
@@ -134,7 +135,8 @@ def load_model(llm_model_name: str, raise_http_exception: bool = True):
             raise FileNotFoundError
         matching_files.sort(key=os.path.getmtime, reverse=True)
         model_file_path = matching_files[0]
-        model_instance = LlamaCppEmbeddings(model_path=model_file_path, use_mlock=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS)
+        with suppress_stdout_stderr():
+            model_instance = LlamaCppEmbeddings(model_path=model_file_path, use_mlock=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS)
         model_instance.client.verbose = False
         embedding_model_cache[llm_model_name] = model_instance
         return model_instance
@@ -147,3 +149,5 @@ def load_model(llm_model_name: str, raise_http_exception: bool = True):
             raise HTTPException(status_code=404, detail="Model file not found")
         else:
             raise FileNotFoundError(f"No model file found matching: {llm_model_name}")
+
+        

@@ -2,7 +2,7 @@ from logger_config import setup_logger
 import shared_resources
 from shared_resources import load_model, token_level_embedding_model_cache, text_completion_model_cache
 from database_functions import AsyncSessionLocal, DatabaseWriter, execute_with_retry
-from misc_utility_functions import clean_filename_for_url_func,  FakeUploadFile, sophisticated_sentence_splitter, merge_transcript_segments_into_combined_text
+from misc_utility_functions import clean_filename_for_url_func,  FakeUploadFile, sophisticated_sentence_splitter, merge_transcript_segments_into_combined_text, suppress_stdout_stderr
 from embeddings_data_models import TextEmbedding, DocumentEmbedding, Document, TokenLevelEmbedding, TokenLevelEmbeddingBundleCombinedFeatureVector, AudioTranscript
 from embeddings_data_models import EmbeddingRequest, TextCompletionRequest
 from embeddings_data_models import TextCompletionResponse,  AudioTranscriptResponse
@@ -297,7 +297,8 @@ def load_token_level_embedding_model(llm_model_name: str, raise_http_exception: 
             raise FileNotFoundError
         matching_files.sort(key=os.path.getmtime, reverse=True) # Sort the files based on modification time (recently modified files first)
         model_file_path = matching_files[0]
-        model_instance = Llama(model_path=model_file_path, embedding=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, verbose=False) # Load the model
+        with suppress_stdout_stderr():        
+            model_instance = Llama(model_path=model_file_path, embedding=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, verbose=False) # Load the model
         token_level_embedding_model_cache[llm_model_name] = model_instance # Cache the loaded model
         return model_instance
     except TypeError as e:
@@ -554,7 +555,8 @@ def load_text_completion_model(llm_model_name: str, raise_http_exception: bool =
             raise FileNotFoundError
         matching_files.sort(key=os.path.getmtime, reverse=True) # Sort the files based on modification time (recently modified files first)
         model_file_path = matching_files[0]
-        model_instance = Llama(model_path=model_file_path, embedding=True, n_ctx=TEXT_COMPLETION_CONTEXT_SIZE_IN_TOKENS, verbose=False) # Load the model
+        with suppress_stdout_stderr():
+            model_instance = Llama(model_path=model_file_path, embedding=True, n_ctx=TEXT_COMPLETION_CONTEXT_SIZE_IN_TOKENS, verbose=False) # Load the model
         text_completion_model_cache[llm_model_name] = model_instance # Cache the loaded model
         return model_instance
     except TypeError as e:
