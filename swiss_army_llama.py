@@ -5,11 +5,12 @@ from database_functions import AsyncSessionLocal, DatabaseWriter, get_db_writer
 from ramdisk_functions import clear_ramdisk
 from misc_utility_functions import  build_faiss_indexes, safe_path
 from embeddings_data_models import DocumentEmbedding, TokenLevelEmbeddingBundle
-from embeddings_data_models import EmbeddingRequest, SemanticSearchRequest, AdvancedSemanticSearchRequest, SimilarityRequest, TextCompletionRequest
-from embeddings_data_models import EmbeddingResponse, SemanticSearchResponse, AdvancedSemanticSearchResponse, SimilarityResponse, AllStringsResponse, AllDocumentsResponse, TextCompletionResponse
+from embeddings_data_models import EmbeddingRequest, SemanticSearchRequest, AdvancedSemanticSearchRequest, SimilarityRequest, TextCompletionRequest, GrammarBuilderRequest, AddGrammarRequest
+from embeddings_data_models import EmbeddingResponse, SemanticSearchResponse, AdvancedSemanticSearchResponse, SimilarityResponse, AllStringsResponse, AllDocumentsResponse, TextCompletionResponse, GrammarBuilderResponse, AddGrammarResponse
 from embeddings_data_models import ShowLogsIncrementalModel
 from service_functions import get_or_compute_embedding, get_or_compute_transcript, add_model_url, get_or_compute_token_level_embedding_bundle_combined_feature_vector, calculate_token_level_embeddings
-from service_functions import parse_submitted_document_file_into_sentence_strings_func, compute_embeddings_for_document, store_document_embeddings_in_db, generate_completion_from_llm
+from service_functions import parse_submitted_document_file_into_sentence_strings_func, compute_embeddings_for_document, store_document_embeddings_in_db, generate_completion_from_llm, validate_bnf_grammar
+from grammar_builder import GrammarBuilder
 from log_viewer_functions import show_logs_incremental_func, show_logs_func
 from uvicorn_config import option
 import asyncio
@@ -20,6 +21,7 @@ import re
 import tempfile
 import traceback
 import zipfile
+from pathlib import Path
 from datetime import datetime
 from hashlib import sha3_256
 from typing import List, Optional, Dict, Any
@@ -28,6 +30,7 @@ import numpy as np
 from decouple import config
 import uvicorn
 import fastapi
+from fastapi.param_functions import Body
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Depends
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, Response
 from sqlalchemy import select
@@ -893,6 +896,91 @@ async def get_text_completions_from_input_prompt(request: TextCompletionRequest,
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
+
+@app.post("/turn_sample_json_into_bnf_grammar_for_llm/",
+        response_model=GrammarBuilderResponse,
+        summary="Generate BNF Grammar from Sample JSON",
+        description="""Generate BNF grammar from a sample JSON file or text. 
+### Parameters:
+- `sample_json`: The sample JSON data as a dictionary (optional if file is uploaded).
+- `file`: The sample JSON file to upload (optional if JSON data is provided in `sample_json`).
+
+### Example Request with JSON Data:
+```json
+{
+    "sample_json": {"name": "John", "age": 30, "is_alive": true}
+}
+```
+
+### Example Request with File Upload:
+Use `multipart/form-data` to upload a JSON file.
+
+### Response:
+The response will include the generated BNF grammar based on the sample JSON provided.
+
+### Example Response:
+```json
+{
+    "bnf_grammar": "root ::= '{' ws root_pair_list ws '}' ws ..."
+}
+```""",
+        response_description="A JSON object containing the generated BNF grammar.")
+async def turn_sample_json_into_bnf_grammar_for_llm(
+    sample_json: GrammarBuilderRequest = Body(None, embed=True),
+    file: UploadFile = File(None)
+) -> GrammarBuilderResponse:
+    if sample_json is None and file is None:
+        raise HTTPException(status_code=400, detail="Either sample_json or file must be provided")
+    gb = GrammarBuilder()
+    if sample_json:
+        bnf_grammar = gb.json_to_bnf(json.dumps(sample_json.sample_json))
+    else:
+        file_content = await file.read()
+        try:
+            json_content = json.loads(file_content.decode('utf-8'))
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+        bnf_grammar = gb.json_to_bnf(json.dumps(json_content))
+    return {"bnf_grammar": bnf_grammar}
+
+
+
+@app.post("/turn_pydantic_model_description_into_bnf_grammar_for_llm/",
+        response_model=GrammarBuilderResponse,
+        summary="Generate BNF Grammar from Pydantic Model Description",
+        description="""Generate BNF grammar based on a Pydantic model description string.
+### Parameters:
+- `pydantic_model_description`: The Pydantic model description as a string. Must include the fields and their types.
+
+### Example Request:
+```json
+{
+    "pydantic_model_description": "class Model(BaseModel):\\n    name: str\\n    age: int\\n    is_alive: bool"
+}
+```
+
+### Response:
+The response will include the generated BNF grammar based on the Pydantic model description provided.
+
+### Example Response:
+```json
+{
+    "bnf_grammar": "root ::= '{' ws root_pair_list ws '}' ws ..."
+}
+```""",
+        response_description="A JSON object containing the generated BNF grammar.")
+async def turn_pydantic_model_into_bnf_grammar_for_llm(
+    request: GrammarBuilderRequest = Body(...)
+) -> GrammarBuilderResponse:
+    if not request.pydantic_model_description:
+        raise HTTPException(status_code=400, detail="Pydantic model description must be provided")
+    
+    gb = GrammarBuilder()
+    bnf_grammar = gb.pydantic_to_json_bnf(request.pydantic_model_description)
+    return {"bnf_grammar": bnf_grammar}
+
+
+
 @app.post("/compute_transcript_with_whisper_from_audio/",
         summary="Transcribe and Embed Audio using Whisper and LLM",
         description="""Transcribe an audio file and optionally compute document embeddings. This endpoint uses the Whisper model for transcription and a specified or default language model for embeddings. The transcription and embeddings are then stored, and a ZIP file containing the embeddings can be downloaded.
@@ -925,6 +1013,45 @@ async def compute_transcript_with_whisper_from_audio(
         logger.error(traceback.format_exc())  # Print the traceback
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
+
+
+@app.post("/add_new_grammar_definition_file/",
+        response_model=AddGrammarResponse,
+        summary="Add a New Grammar Definition File",
+        description="""Add a new BNF grammar definition file.
+### Parameters:
+- `bnf_grammar`: The BNF grammar string.
+- `grammar_file_name`: The name for the new grammar file.
+
+### Example Request:
+```json
+{
+    "bnf_grammar": "root ::= '{' ws root_pair_list ws '}' ws ...",
+    "grammar_file_name": "new_grammar"
+}
+```
+
+### Response:
+The response will include a list of all valid grammar files in the `grammar_files` directory.
+
+### Example Response:
+```json
+{
+    "valid_grammar_files": ["new_grammar.gbnf", "another_grammar.gbnf"]
+}
+```""",
+        response_description="A JSON object containing a list of all valid grammar files.")
+async def add_new_grammar_definition_file(request: AddGrammarRequest) -> AddGrammarResponse:
+    if not validate_bnf_grammar(request.bnf_grammar):
+        raise HTTPException(status_code=400, detail="Invalid BNF grammar")
+    
+    grammar_file_path = Path("grammar_files") / f"{request.grammar_file_name}.gbnf"
+    with open(grammar_file_path, "w") as f:
+        f.write(request.bnf_grammar)
+    
+    valid_grammar_files = [f.name for f in Path("grammar_files").glob("*.gbnf")]
+    
+    return {"valid_grammar_files": valid_grammar_files}
 
 @app.post("/clear_ramdisk/")
 async def clear_ramdisk_endpoint(token: str = None):

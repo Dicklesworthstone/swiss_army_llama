@@ -7,6 +7,7 @@ from embeddings_data_models import TextEmbedding, DocumentEmbedding, Document, T
 from embeddings_data_models import EmbeddingRequest, TextCompletionRequest
 from embeddings_data_models import TextCompletionResponse,  AudioTranscriptResponse
 import os
+import re
 import shutil
 import psutil
 import glob
@@ -614,3 +615,33 @@ async def generate_completion_from_llm(request: TextCompletionRequest, req: Requ
                                             llm_model_usage_json = llm_model_usage_json)
         list_of_responses.append(response)
     return list_of_responses
+
+def validate_bnf_grammar_revised(grammar):
+    defined_rules, used_rules = set(), set()
+    for line in grammar.strip().split('\n'):
+        if '::=' not in line: 
+            continue
+        parts = line.split('::=')
+        rule = parts[0].strip()
+        if rule in defined_rules:
+            return False, f"Rule {rule} is defined more than once."
+        defined_rules.add(rule)
+        expression = parts[-1]
+        # Tokenize the expression using regex
+        tokens = re.findall(r'\b[\w-]+\b|\[.*?\]|\(.*?\)|".*?"', expression)
+        # Additional handling for complex expressions
+        complex_tokens = re.findall(r'[\w-]+\[[\w-]+\]', expression)
+        tokens.extend(complex_tokens)
+        for token in tokens:
+            if token.startswith('[') or token.startswith('(') or token.startswith('"'):
+                continue  # Skip character classes, optional constructs, and string literals
+            if '[' in token and ']' in token:  # Split complex tokens into individual rules
+                sub_parts = token.split('[')
+                used_rules.add(sub_parts[0])
+                used_rules.add(sub_parts[1][:-1])
+                continue
+            used_rules.add(token)
+    for rule in used_rules:
+        if rule not in defined_rules:
+            return False, f"Used rule {rule} is not defined."
+    return True, "Valid BNF Grammar"
