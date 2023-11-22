@@ -58,7 +58,7 @@ if use_hardcoded_security_token:
     USE_SECURITY_TOKEN = config("USE_SECURITY_TOKEN", default=False, cast=bool)
 else:
     USE_SECURITY_TOKEN = False
-DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="openchat_v3.2_super", cast=str) 
+DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="yarn-mistral-7b-128k", cast=str) 
 USE_RAMDISK = config("USE_RAMDISK", default=False, cast=bool)
 RAMDISK_PATH = config("RAMDISK_PATH", default="/mnt/ramdisk", cast=str)
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
@@ -100,7 +100,7 @@ The response will include a JSON object containing the list of available model n
 ### Example Response:
 ```json
 {
-    "model_names": ["yarn-llama-2-7b-128k", "openchat_v3.2_super", "mistral-7b-instruct-v0.1", "my_super_custom_model"]
+    "model_names": ["yarn-llama-2-7b-128k", "openchat_v3.2_super", "yarn-mistral-7b-128k", "my_super_custom_model"]
 }
 ```""",
         response_description="A JSON object containing the list of available model names.")
@@ -849,7 +849,7 @@ The request must contain the following attributes:
 ```json
 {
     "input_prompt": "The Kings of France in the 17th Century:",
-    "llm_model_name": "mistral-7b-instruct-v0.1",
+    "llm_model_name": "yarn-mistral-7b-128k",
     "temperature": 0.95,
     "grammar_file_string": "json",
     "number_of_tokens_to_generate": 500,
@@ -865,7 +865,7 @@ The response will include the generated text completion, the time taken to compu
 [
     {
         "input_prompt": "The Kings of France in the 17th Century:",
-        "llm_model_name": "mistral-7b-instruct-v0.1",
+        "llm_model_name": "yarn-mistral-7b-128k",
         "grammar_file_string": "json",
         "number_of_tokens_to_generate": 500,
         "number_of_completions_to_generate": 3,
@@ -875,7 +875,7 @@ The response will include the generated text completion, the time taken to compu
     },
     {
         "input_prompt": "The Kings of France in the 17th Century:",
-        "llm_model_name": "mistral-7b-instruct-v0.1",
+        "llm_model_name": "yarn-mistral-7b-128k",
         "grammar_file_string": "json",
         "number_of_tokens_to_generate": 500,
         "number_of_completions_to_generate": 3,
@@ -885,7 +885,7 @@ The response will include the generated text completion, the time taken to compu
     },
     {
         "input_prompt": "The Kings of France in the 17th Century:",
-        "llm_model_name": "mistral-7b-instruct-v0.1",
+        "llm_model_name": "yarn-mistral-7b-128k",
         "grammar_file_string": "json",
         "number_of_tokens_to_generate": 500,
         "number_of_completions_to_generate": 3,
