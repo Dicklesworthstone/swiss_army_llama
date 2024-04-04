@@ -17,6 +17,7 @@ import asyncio
 import glob
 import json
 import os 
+import signal
 import re
 import tempfile
 import traceback
@@ -33,6 +34,7 @@ import fastapi
 from fastapi.param_functions import Body
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Depends, Form
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, Response
+from contextlib import asynccontextmanager
 from sqlalchemy import select
 from sqlalchemy import text as sql_text
 from sqlalchemy.exc import SQLAlchemyError
@@ -46,6 +48,21 @@ import uvloop
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 logger = setup_logger()
 
+class GracefulExit(BaseException):
+    pass
+
+def raise_graceful_exit():
+    raise GracefulExit()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup code
+    await initialize_globals()
+    yield
+    # Shutdown code (if any)
+    pass
+
+
 # Note: the Ramdisk setup and teardown requires sudo; to enable password-less sudo, edit your sudoers file with `sudo visudo`.
 # Add the following lines, replacing username with your actual username
 # username ALL=(ALL) NOPASSWD: /bin/mount -t tmpfs -o size=*G tmpfs /mnt/ramdisk
@@ -58,7 +75,7 @@ if use_hardcoded_security_token:
     USE_SECURITY_TOKEN = config("USE_SECURITY_TOKEN", default=False, cast=bool)
 else:
     USE_SECURITY_TOKEN = False
-DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="yarn-mistral-7b-128k", cast=str) 
+DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="mistral-7b-instruct-v0.2", cast=str) 
 USE_RAMDISK = config("USE_RAMDISK", default=False, cast=bool)
 RAMDISK_PATH = config("RAMDISK_PATH", default="/mnt/ramdisk", cast=str)
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
@@ -68,9 +85,9 @@ logger.info(f"USE_RAMDISK is set to: {USE_RAMDISK}")
 description_string = """
 🇨🇭🎖️🦙 Swiss Army Llama is your One-Stop-Shop to Quickly and Conveniently Integrate Powerful Local LLM Functionality into your Project via a REST API.
 """
-app = FastAPI(title="Swiss Army Llama", description=description_string, docs_url="/")  # Set the Swagger UI to root
+app = FastAPI(title="Swiss Army Llama", description=description_string, docs_url="/", lifespan=lifespan)  # Set the Swagger UI to root
 
-
+    
 @app.exception_handler(SQLAlchemyError) 
 async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError) -> JSONResponse:
     logger.exception(exc)
@@ -100,7 +117,7 @@ The response will include a JSON object containing the list of available model n
 ### Example Response:
 ```json
 {
-    "model_names": ["yarn-llama-2-7b-128k", "openchat_v3.2_super", "yarn-mistral-7b-128k", "my_super_custom_model"]
+    "model_names": ["yarn-llama-2-7b-128k", "Hermes-2-Pro-Mistral-7B", "mistral-7b-instruct-v0.2", "my_super_custom_model"]
 }
 ```""",
         response_description="A JSON object containing the list of available model names.")
@@ -277,7 +294,7 @@ The request must contain the following attributes:
 ```json
 {
     "text": "This is a sample text.",
-    "llm_model_name": "openchat_v3.2_super"
+    "llm_model_name": "Hermes-2-Pro-Mistral-7B"
 }
 ```
 
@@ -332,7 +349,7 @@ The request must contain the following attributes:
 ```json
 {
     "text": "This is a sample text.",
-    "llm_model_name": "openchat_v3.2_super"
+    "llm_model_name": "Hermes-2-Pro-Mistral-7B"
 }
 ```
 
@@ -485,7 +502,7 @@ The request must contain the following attributes:
 {
     "text1": "This is a sample text.",
     "text2": "This is another sample text.",
-    "llm_model_name": "openchat_v3.2_super",
+    "llm_model_name": "Hermes-2-Pro-Mistral-7B",
     "similarity_measure": "all"
 }
 ```""")
@@ -562,7 +579,7 @@ The request must contain the following attributes:
 ```json
 {
     "query_text": "Find me the most similar string!",
-    "llm_model_name": "openchat_v3.2_super",
+    "llm_model_name": "Hermes-2-Pro-Mistral-7B",
     "number_of_most_similar_strings_to_return": 5
 }
 ```
@@ -652,7 +669,7 @@ The request must contain the following attributes:
 ```json
 {
     "query_text": "Find me the most similar string!",
-    "llm_model_name": "openchat_v3.2_super",
+    "llm_model_name": "Hermes-2-Pro-Mistral-7B",
     "similarity_filter_percentage": 0.02,
     "number_of_most_similar_strings_to_return": 5
 }
@@ -849,7 +866,7 @@ The request must contain the following attributes:
 ```json
 {
     "input_prompt": "The Kings of France in the 17th Century:",
-    "llm_model_name": "yarn-mistral-7b-128k",
+    "llm_model_name": "mistral-7b-instruct-v0.2",
     "temperature": 0.95,
     "grammar_file_string": "json",
     "number_of_tokens_to_generate": 500,
@@ -865,7 +882,7 @@ The response will include the generated text completion, the time taken to compu
 [
     {
         "input_prompt": "The Kings of France in the 17th Century:",
-        "llm_model_name": "yarn-mistral-7b-128k",
+        "llm_model_name": "mistral-7b-instruct-v0.2",
         "grammar_file_string": "json",
         "number_of_tokens_to_generate": 500,
         "number_of_completions_to_generate": 3,
@@ -875,7 +892,7 @@ The response will include the generated text completion, the time taken to compu
     },
     {
         "input_prompt": "The Kings of France in the 17th Century:",
-        "llm_model_name": "yarn-mistral-7b-128k",
+        "llm_model_name": "mistral-7b-instruct-v0.2",
         "grammar_file_string": "json",
         "number_of_tokens_to_generate": 500,
         "number_of_completions_to_generate": 3,
@@ -885,7 +902,7 @@ The response will include the generated text completion, the time taken to compu
     },
     {
         "input_prompt": "The Kings of France in the 17th Century:",
-        "llm_model_name": "yarn-mistral-7b-128k",
+        "llm_model_name": "mistral-7b-instruct-v0.2",
         "grammar_file_string": "json",
         "number_of_tokens_to_generate": 500,
         "number_of_completions_to_generate": 3,
@@ -1199,12 +1216,15 @@ The response will be an HTML page that displays the logs in a human-readable for
 def show_logs_default():
     return show_logs_func(5)
 
-
-
-@app.on_event("startup")
-async def startup_event():
-    await initialize_globals()
-    
-        
 if __name__ == "__main__":
-    uvicorn.run("swiss_army_llama:app", **option)
+    try:
+        uvicorn.run("swiss_army_llama:app", **option)
+    except GracefulExit:
+        logger.info("Received signal to terminate. Shutting down gracefully...")
+        sys.exit(0)
+    except KeyboardInterrupt:
+        logger.info("Received KeyboardInterrupt. Shutting down gracefully...")
+        sys.exit(0)
+    except Exception:
+        logger.exception("Unhandled exception occurred during shutdown.")
+        sys.exit(1)
