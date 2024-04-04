@@ -17,7 +17,7 @@ httpx
 filelock
 fast_vector_similarity
 faster-whisper
-textract
+textract==1.6.3
 pytest
 pytz
 uvloop
