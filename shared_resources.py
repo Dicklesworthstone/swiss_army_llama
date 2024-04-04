@@ -11,7 +11,7 @@ import os
 import glob
 import json
 from typing import List, Tuple, Dict
-from langchain.embeddings import LlamaCppEmbeddings
+from langchain_community.embeddings import LlamaCppEmbeddings
 from decouple import config
 from fastapi import HTTPException
 
