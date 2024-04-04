@@ -11,6 +11,7 @@ PyPDF2
 python-multipart
 python-magic
 langchain
+langchain-community
 llama-cpp-python
 httpx
 filelock
