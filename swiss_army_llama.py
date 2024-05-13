@@ -75,7 +75,7 @@ if use_hardcoded_security_token:
     USE_SECURITY_TOKEN = config("USE_SECURITY_TOKEN", default=False, cast=bool)
 else:
     USE_SECURITY_TOKEN = False
-DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="mistral-7b-instruct-v0.2", cast=str) 
+DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="Llama-3-8B-Instruct-64k", cast=str) 
 USE_RAMDISK = config("USE_RAMDISK", default=False, cast=bool)
 RAMDISK_PATH = config("RAMDISK_PATH", default="/mnt/ramdisk", cast=str)
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
@@ -117,7 +117,7 @@ The response will include a JSON object containing the list of available model n
 ### Example Response:
 ```json
 {
-    "model_names": ["yarn-llama-2-7b-128k", "Hermes-2-Pro-Mistral-7B", "mistral-7b-instruct-v0.2", "my_super_custom_model"]
+    "model_names": ["Llama-3-8B-Instruct-64k", "Phi-3-mini-4k-instruct-q4", "my_super_custom_model"]
 }
 ```""",
         response_description="A JSON object containing the list of available model names.")
@@ -294,7 +294,7 @@ The request must contain the following attributes:
 ```json
 {
     "text": "This is a sample text.",
-    "llm_model_name": "Hermes-2-Pro-Mistral-7B"
+    "llm_model_name": "Llama-3-8B-Instruct-64k"
 }
 ```
 
@@ -349,7 +349,7 @@ The request must contain the following attributes:
 ```json
 {
     "text": "This is a sample text.",
-    "llm_model_name": "Hermes-2-Pro-Mistral-7B"
+    "llm_model_name": "Llama-3-8B-Instruct-64k"
 }
 ```
 
@@ -502,7 +502,7 @@ The request must contain the following attributes:
 {
     "text1": "This is a sample text.",
     "text2": "This is another sample text.",
-    "llm_model_name": "Hermes-2-Pro-Mistral-7B",
+    "llm_model_name": "Llama-3-8B-Instruct-64k",
     "similarity_measure": "all"
 }
 ```""")
@@ -579,7 +579,7 @@ The request must contain the following attributes:
 ```json
 {
     "query_text": "Find me the most similar string!",
-    "llm_model_name": "Hermes-2-Pro-Mistral-7B",
+    "llm_model_name": "Llama-3-8B-Instruct-64k",
     "number_of_most_similar_strings_to_return": 5
 }
 ```
@@ -669,7 +669,7 @@ The request must contain the following attributes:
 ```json
 {
     "query_text": "Find me the most similar string!",
-    "llm_model_name": "Hermes-2-Pro-Mistral-7B",
+    "llm_model_name": "Llama-3-8B-Instruct-64k",
     "similarity_filter_percentage": 0.02,
     "number_of_most_similar_strings_to_return": 5
 }
