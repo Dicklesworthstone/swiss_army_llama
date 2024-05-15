@@ -1,6 +1,6 @@
 from logger_config import setup_logger
 import shared_resources
-from shared_resources import load_model, token_level_embedding_model_cache, text_completion_model_cache
+from shared_resources import load_model, token_level_embedding_model_cache, text_completion_model_cache, is_gpu_available
 from database_functions import AsyncSessionLocal, DatabaseWriter, execute_with_retry
 from misc_utility_functions import clean_filename_for_url_func,  FakeUploadFile, sophisticated_sentence_splitter, merge_transcript_segments_into_combined_text, suppress_stdout_stderr
 from embeddings_data_models import TextEmbedding, DocumentEmbedding, Document, TokenLevelEmbedding, TokenLevelEmbeddingBundleCombinedFeatureVector, AudioTranscript
@@ -15,6 +15,7 @@ import json
 import asyncio
 import zipfile
 import tempfile
+import traceback
 import time
 from datetime import datetime
 from hashlib import sha3_256
@@ -30,7 +31,6 @@ from typing import List, Optional, Tuple
 from decouple import config
 from faster_whisper import WhisperModel
 from llama_cpp import Llama, LlamaGrammar
-
 logger = setup_logger()
 SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT = config("SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT", default=8089, cast=int)
 DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="openchat_v3.2_super", cast=str) 
@@ -43,9 +43,11 @@ MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING = config("MINIMUM_STRING_LENGTH_FOR
 USE_PARALLEL_INFERENCE_QUEUE = config("USE_PARALLEL_INFERENCE_QUEUE", default=False, cast=bool)
 MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS = config("MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS", default=10, cast=int)
 USE_RAMDISK = config("USE_RAMDISK", default=False, cast=bool)
+USE_VERBOSE = config("USE_VERBOSE", default=False, cast=bool)
 RAMDISK_PATH = config("RAMDISK_PATH", default="/mnt/ramdisk", cast=str)
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 
+    
 async def get_transcript_from_db(audio_file_hash: str):
     return await execute_with_retry(_get_transcript_from_db, audio_file_hash)
 
@@ -285,9 +287,9 @@ async def _save_embedding_to_db(text: str, llm_model_name: str, embedding_json: 
         document_file_hash=document_file_hash
     )
     await shared_resources.db_writer.enqueue_write([embedding])  # Enqueue the write operation using the db_writer instance
-
-
+    
 def load_token_level_embedding_model(llm_model_name: str, raise_http_exception: bool = True):
+    global USE_VERBOSE
     try:
         if llm_model_name in token_level_embedding_model_cache: # Check if the model is already loaded in the cache
             return token_level_embedding_model_cache[llm_model_name]
@@ -298,8 +300,12 @@ def load_token_level_embedding_model(llm_model_name: str, raise_http_exception: 
             raise FileNotFoundError
         matching_files.sort(key=os.path.getmtime, reverse=True) # Sort the files based on modification time (recently modified files first)
         model_file_path = matching_files[0]
-        with suppress_stdout_stderr():        
-            model_instance = Llama(model_path=model_file_path, embedding=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, verbose=False) # Load the model
+        with suppress_stdout_stderr():
+            gpu_info = is_gpu_available()
+            if gpu_info['gpu_found']:
+                model_instance = Llama(model_path=model_file_path, embedding=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, verbose=USE_VERBOSE, n_gpu_layers=-1) # Load the model with GPU acceleration
+            else:
+                model_instance = Llama(model_path=model_file_path, embedding=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, verbose=USE_VERBOSE) # Load the model without GPU acceleration
         token_level_embedding_model_cache[llm_model_name] = model_instance # Cache the loaded model
         return model_instance
     except TypeError as e:
@@ -307,6 +313,7 @@ def load_token_level_embedding_model(llm_model_name: str, raise_http_exception: 
         raise
     except Exception as e:
         logger.error(f"Exception occurred while loading the model: {e}")
+        traceback.print_exc()
         if raise_http_exception:
             raise HTTPException(status_code=404, detail="Model file not found")
         else:
@@ -546,6 +553,7 @@ async def store_document_embeddings_in_db(file: File, file_hash: str, original_f
     await shared_resources.db_writer.enqueue_write(write_operations)  # Enqueue the write operation for text embeddings
 
 def load_text_completion_model(llm_model_name: str, raise_http_exception: bool = True):
+    global USE_VERBOSE
     try:
         if llm_model_name in text_completion_model_cache: # Check if the model is already loaded in the cache
             return text_completion_model_cache[llm_model_name]
@@ -557,7 +565,11 @@ def load_text_completion_model(llm_model_name: str, raise_http_exception: bool =
         matching_files.sort(key=os.path.getmtime, reverse=True) # Sort the files based on modification time (recently modified files first)
         model_file_path = matching_files[0]
         with suppress_stdout_stderr():
-            model_instance = Llama(model_path=model_file_path, embedding=True, n_ctx=TEXT_COMPLETION_CONTEXT_SIZE_IN_TOKENS, verbose=False) # Load the model
+            gpu_info = is_gpu_available()
+            if gpu_info['gpu_found']:
+                model_instance = Llama(model_path=model_file_path, n_ctx=TEXT_COMPLETION_CONTEXT_SIZE_IN_TOKENS, verbose=USE_VERBOSE, n_gpu_layers=-1) # Load the model with GPU acceleration
+            else:
+                model_instance = Llama(model_path=model_file_path, n_ctx=TEXT_COMPLETION_CONTEXT_SIZE_IN_TOKENS, verbose=USE_VERBOSE) # Load the model without GPU acceleration
         text_completion_model_cache[llm_model_name] = model_instance # Cache the loaded model
         return model_instance
     except TypeError as e:
@@ -565,6 +577,7 @@ def load_text_completion_model(llm_model_name: str, raise_http_exception: bool =
         raise
     except Exception as e:
         logger.error(f"Exception occurred while loading the model: {e}")
+        traceback.print_exc()
         if raise_http_exception:
             raise HTTPException(status_code=404, detail="Model file not found")
         else:

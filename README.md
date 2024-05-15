@@ -42,6 +42,7 @@ python3 -m venv venv
 source venv/bin/activate
 python3 -m pip install --upgrade pip
 python3 -m pip install wheel
+python3 -m pip install --upgrade setuptools wheel && \
 pip install -r requirements.txt
 python3 swiss_army_llama.py
 ```
@@ -147,7 +148,7 @@ You can configure the service easily by editing the included `.env` file. Here's
 - `DB_WRITE_BATCH_SIZE`: Database write batch size. (e.g., `25`)
 - `RETRY_DELAY_BASE_SECONDS`: Retry delay base in seconds. (e.g., `1`)
 - `JITTER_FACTOR`: Jitter factor for retries. (e.g., `0.1`)
-- `USE_RAMDISK`: Use RAM disk. (e.g., `True`)
+- `USE_RAMDISK`: Use RAM disk. (e.g., `1`)
 - `RAMDISK_PATH`: Path to the RAM disk. (e.g., `"/mnt/ramdisk"`)
 - `RAMDISK_SIZE_IN_GB`: RAM disk size in GB. (e.g., `40`)
 

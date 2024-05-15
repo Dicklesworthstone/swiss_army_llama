@@ -1,0 +1,12 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Swiss Army Llama",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/swiss_army_llama.py",
+            "console": "integratedTerminal",
+        }
+    ]
+}

@@ -8,8 +8,10 @@ import asyncio
 import subprocess
 import urllib.request
 import os
+import nvgpu
 import glob
 import json
+import traceback
 from typing import List, Tuple, Dict
 from langchain_community.embeddings import LlamaCppEmbeddings
 from decouple import config
@@ -31,9 +33,39 @@ MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING = config("MINIMUM_STRING_LENGTH_FOR
 USE_PARALLEL_INFERENCE_QUEUE = config("USE_PARALLEL_INFERENCE_QUEUE", default=False, cast=bool)
 MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS = config("MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS", default=10, cast=int)
 USE_RAMDISK = config("USE_RAMDISK", default=False, cast=bool)
+USE_VERBOSE = config("USE_VERBOSE", default=False, cast=bool)
 RAMDISK_PATH = config("RAMDISK_PATH", default="/mnt/ramdisk", cast=str)
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 
+def is_gpu_available():
+    try:
+        gpu_info = nvgpu.gpu_info()
+        num_gpus = len(gpu_info)
+        if num_gpus == 0:
+            return {
+                "gpu_found": False,
+                "num_gpus": 0,
+                "first_gpu_vram": 0,
+                "total_vram": 0
+            }
+        first_gpu_vram = gpu_info[0]['mem_total']
+        total_vram = sum(gpu['mem_total'] for gpu in gpu_info)
+        return {
+            "gpu_found": True,
+            "num_gpus": num_gpus,
+            "first_gpu_vram": first_gpu_vram,
+            "total_vram": total_vram,
+            "gpu_info": gpu_info
+        }
+    except Exception as e:
+        return {
+            "gpu_found": False,
+            "num_gpus": 0,
+            "first_gpu_vram": 0,
+            "total_vram": 0,
+            "error": str(e)
+        }
+        
 async def initialize_globals():
     global db_writer, faiss_indexes, token_faiss_indexes, associated_texts_by_model, redis, lock_manager
     if not is_redis_running():
@@ -125,6 +157,7 @@ def download_models() -> Tuple[List[str], List[Dict[str, str]]]:
 
 
 def load_model(llm_model_name: str, raise_http_exception: bool = True):
+    global USE_VERBOSE
     try:
         models_dir = os.path.join(RAMDISK_PATH, 'models') if USE_RAMDISK else os.path.join(BASE_DIRECTORY, 'models')
         if llm_model_name in embedding_model_cache:
@@ -136,8 +169,12 @@ def load_model(llm_model_name: str, raise_http_exception: bool = True):
         matching_files.sort(key=os.path.getmtime, reverse=True)
         model_file_path = matching_files[0]
         with suppress_stdout_stderr():
-            model_instance = LlamaCppEmbeddings(model_path=model_file_path, use_mlock=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS)
-        model_instance.client.verbose = False
+            gpu_info = is_gpu_available()
+            if gpu_info['gpu_found']:
+                model_instance = LlamaCppEmbeddings(model_path=model_file_path, use_mlock=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, n_gpu_layers=-1) # Load the model with GPU acceleration
+            else:
+                model_instance = LlamaCppEmbeddings(model_path=model_file_path, use_mlock=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS) # Load the model without GPU acceleration
+        model_instance.client.verbose = USE_VERBOSE
         embedding_model_cache[llm_model_name] = model_instance
         return model_instance
     except TypeError as e:
@@ -145,6 +182,7 @@ def load_model(llm_model_name: str, raise_http_exception: bool = True):
         raise
     except Exception as e:
         logger.error(f"Exception occurred while loading the model: {e}")
+        traceback.print_exc()
         if raise_http_exception:
             raise HTTPException(status_code=404, detail="Model file not found")
         else:
