@@ -37,13 +37,36 @@ if ! grep -q 'export PYENV_ROOT="$HOME/.pyenv"' "$CONFIG_FILE"; then
     echo 'export PYENV_ROOT="$HOME/.pyenv"' >> "$CONFIG_FILE"
     echo 'export PATH="$PYENV_ROOT/bin:$PATH"' >> "$CONFIG_FILE"
     echo 'eval "$(pyenv init --path)"' >> "$CONFIG_FILE"
-    source "$CONFIG_FILE"
+
+    if [ "$DEFAULT_SHELL" = "zsh" ]; then
+        zsh -c "source $CONFIG_FILE"
+    else
+        bash -c "source $CONFIG_FILE"
+    fi
 else
     echo "pyenv configuration already present in $CONFIG_FILE"
+    if [ "$DEFAULT_SHELL" = "zsh" ]; then
+        zsh -c "source $CONFIG_FILE"
+    else
+        bash -c "source $CONFIG_FILE"
+    fi
 fi
 
 echo "________________________________________________"
-echo "Stage 3: Updating pyenv and installing Python 3.12"
+echo "Stage 3: Backing up and preparing requirements.txt"
+echo "________________________________________________"
+
+# Back up requirements.txt if not already backed up
+if [ ! -f requirements_original.txt ]; then
+    echo "Backing up requirements.txt to requirements_original.txt"
+    cp requirements.txt requirements_original.txt
+else
+    echo "Restoring requirements.txt from requirements_original.txt"
+    cp requirements_original.txt requirements.txt
+fi
+
+echo "________________________________________________"
+echo "Stage 4: Updating pyenv and installing Python 3.12"
 echo "________________________________________________"
 
 cd ~/.pyenv && git pull && cd -
@@ -51,7 +74,7 @@ echo "Installing Python 3.12 with pyenv"
 pyenv install -f 3.12
 
 echo "________________________________________________"
-echo "Stage 4: Installing additional dependencies"
+echo "Stage 5: Installing additional dependencies"
 echo "________________________________________________"
 
 sudo apt-get update
@@ -62,7 +85,7 @@ sudo systemctl enable redis-server
 sudo systemctl start redis
 
 echo "________________________________________________"
-echo "Stage 5: Detecting CUDA and updating requirements.txt"
+echo "Stage 6: Detecting CUDA and updating requirements.txt"
 echo "________________________________________________"
 
 if command -v nvidia-smi &> /dev/null; then
@@ -78,15 +101,17 @@ if command -v nvidia-smi &> /dev/null; then
 
     if [ -n "$CUDA_TAG" ]; then
         echo "Updating requirements.txt for CUDA version $CUDA_TAG"
-        sed -i 's/faiss-cpu/faiss/' requirements.txt
         sed -i 's@llama-cpp-python@llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/'"$CUDA_TAG"'@' requirements.txt
+        echo "Setting up Faiss for GPU"
+        export FAISS_ENABLE_GPU=ON
+        pip install --no-binary :all: faiss-cpu
     fi
 else
     echo "CUDA not detected"
 fi
 
 echo "________________________________________________"
-echo "Stage 6: Setting up Python environment"
+echo "Stage 7: Setting up Python environment"
 echo "________________________________________________"
 
 pyenv local 3.12

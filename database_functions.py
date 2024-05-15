@@ -155,7 +155,10 @@ async def initialize_db():
             await conn.execute(sql_text(pragma_string))
             logger.info(f"Executed SQLite PRAGMA: {pragma_string}")
             logger.info(f"Justification: {list_of_sqlite_pragma_justification_strings[list_of_sqlite_pragma_strings.index(pragma_string)]}")
-        await conn.run_sync(Base.metadata.create_all) # Create tables if they don't exist
+        try:
+            await conn.run_sync(Base.metadata.create_all) # Create tables if they don't exist
+        except Exception as e:
+            pass
     logger.info("Database initialization completed.")
 
 def get_db_writer() -> DatabaseWriter:
