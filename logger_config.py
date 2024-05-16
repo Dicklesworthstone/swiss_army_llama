@@ -13,7 +13,7 @@ def setup_logger():
     if not os.path.exists(old_logs_dir):
         os.makedirs(old_logs_dir)
     logger.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     log_file_path = 'swiss_army_llama.log'
     log_queue = queue.Queue(-1)  # Create a queue for the handlers
     fh = RotatingFileHandler(log_file_path, maxBytes=10*1024*1024, backupCount=5)
@@ -24,10 +24,12 @@ def setup_logger():
         shutil.move(source, dest)
     fh.namer = namer
     fh.rotator = rotator
+    sh = logging.StreamHandler()  # Stream handler
+    sh.setFormatter(formatter)
     queue_handler = QueueHandler(log_queue)  # Create QueueHandler
     queue_handler.setFormatter(formatter)
     logger.addHandler(queue_handler)
-    listener = QueueListener(log_queue, fh)  # Create QueueListener with only the file handler
+    listener = QueueListener(log_queue, sh)
     listener.start()
     logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)  # Configure SQLalchemy logging
     return logger

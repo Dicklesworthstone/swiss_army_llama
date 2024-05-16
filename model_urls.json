@@ -1,4 +1,6 @@
 [
   "https://huggingface.co/MaziyarPanahi/Llama-3-8B-Instruct-64k-GGUF/resolve/main/Llama-3-8B-Instruct-64k.Q5_K_M.gguf",
-  "https://huggingface.co/xtuner/llava-phi-3-mini-gguf/resolve/main/llava-phi-3-mini-int4.gguf"
+  "https://huggingface.co/NousResearch/Hermes-2-Theta-Llama-3-8B-GGUF/resolve/main/Hermes-2-Pro-Llama-3-Instruct-Merged-DPO-Q4_K_M.gguf",
+  "https://huggingface.co/TheBloke/Llama-2-7B-Chat-GGUF/resolve/main/llama-2-7b-chat.Q2_K.gguf",
+  "https://huggingface.co/vonjack/bge-m3-gguf/resolve/main/bge-m3-q8_0.gguf"
 ]
