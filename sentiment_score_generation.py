@@ -1283,7 +1283,7 @@ def get_model_memory_requirement(model_name):
 # Example usage:
 lowest_possible_score = -100.0
 highest_possible_score = 100.0
-model_name = "wizardlm-1.0-uncensored-llama2-13b"
+model_name = "Meta-Llama-3-8B-Instruct.Q3_K_S"
 source_text = "The food was delicious but the service was slow. Overall I would try it again but not on a busy night." # Example source text
 focus_key = "restaurant_review_focus" # The bundle of sentiment adjectives to use to analyze the source text
 

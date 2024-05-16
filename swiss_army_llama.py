@@ -1,5 +1,5 @@
 import shared_resources
-from shared_resources import initialize_globals, download_models
+from shared_resources import initialize_globals, download_models, is_gpu_available
 from logger_config import setup_logger
 from database_functions import AsyncSessionLocal, DatabaseWriter, get_db_writer
 from ramdisk_functions import clear_ramdisk
@@ -48,6 +48,9 @@ import uvloop
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 logger = setup_logger()
 
+gpu_check_results = is_gpu_available()
+logger.info(f"\nGPU check results:\n {gpu_check_results}\n")
+
 class GracefulExit(BaseException):
     pass
 
@@ -75,7 +78,7 @@ if use_hardcoded_security_token:
     USE_SECURITY_TOKEN = config("USE_SECURITY_TOKEN", default=False, cast=bool)
 else:
     USE_SECURITY_TOKEN = False
-DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="Llama-3-8B-Instruct-64k", cast=str) 
+DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="Meta-Llama-3-8B-Instruct.Q3_K_S", cast=str) 
 USE_RAMDISK = config("USE_RAMDISK", default=False, cast=bool)
 RAMDISK_PATH = config("RAMDISK_PATH", default="/mnt/ramdisk", cast=str)
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
@@ -117,7 +120,7 @@ The response will include a JSON object containing the list of available model n
 ### Example Response:
 ```json
 {
-    "model_names": ["Llama-3-8B-Instruct-64k", "Phi-3-mini-4k-instruct-q4", "my_super_custom_model"]
+    "model_names": ["Meta-Llama-3-8B-Instruct", "Hermes-2-Pro-Llama-3-Instruct-Merged-DPO-Q4_K_M", "my_super_custom_model"]
 }
 ```""",
         response_description="A JSON object containing the list of available model names.")
@@ -294,7 +297,7 @@ The request must contain the following attributes:
 ```json
 {
     "text": "This is a sample text.",
-    "llm_model_name": "Llama-3-8B-Instruct-64k"
+    "llm_model_name": "bge-m3-q8_0"
 }
 ```
 
@@ -349,7 +352,7 @@ The request must contain the following attributes:
 ```json
 {
     "text": "This is a sample text.",
-    "llm_model_name": "Llama-3-8B-Instruct-64k"
+    "llm_model_name": "Meta-Llama-3-8B-Instruct"
 }
 ```
 
@@ -502,7 +505,7 @@ The request must contain the following attributes:
 {
     "text1": "This is a sample text.",
     "text2": "This is another sample text.",
-    "llm_model_name": "Llama-3-8B-Instruct-64k",
+    "llm_model_name": "bge-m3-q8_0",
     "similarity_measure": "all"
 }
 ```""")
@@ -579,7 +582,7 @@ The request must contain the following attributes:
 ```json
 {
     "query_text": "Find me the most similar string!",
-    "llm_model_name": "Llama-3-8B-Instruct-64k",
+    "llm_model_name": "bge-m3-q8_0",
     "number_of_most_similar_strings_to_return": 5
 }
 ```
@@ -669,7 +672,7 @@ The request must contain the following attributes:
 ```json
 {
     "query_text": "Find me the most similar string!",
-    "llm_model_name": "Llama-3-8B-Instruct-64k",
+    "llm_model_name": "bge-m3-q8_0",
     "similarity_filter_percentage": 0.02,
     "number_of_most_similar_strings_to_return": 5
 }
@@ -776,7 +779,7 @@ The format of the JSON string returned by the endpoint (default is `records`; th
 - PDF: Submit a `.pdf` file.""",
         response_description="Either a ZIP file containing the embeddings JSON file or a direct JSON response, depending on the value of `send_back_json_or_zip_file`.")
 async def get_all_embedding_vectors_for_document(file: UploadFile = File(...),
-                                                llm_model_name: str = DEFAULT_MODEL_NAME,
+                                                llm_model_name: str = "bge-m3-q8_0",
                                                 json_format: str = 'records',
                                                 token: str = None,
                                                 send_back_json_or_zip_file: str = 'zip',
@@ -866,7 +869,7 @@ The request must contain the following attributes:
 ```json
 {
     "input_prompt": "The Kings of France in the 17th Century:",
-    "llm_model_name": "mistral-7b-instruct-v0.2",
+    "llm_model_name": "Meta-Llama-3-8B-Instruct",
     "temperature": 0.95,
     "grammar_file_string": "json",
     "number_of_tokens_to_generate": 500,
@@ -882,7 +885,7 @@ The response will include the generated text completion, the time taken to compu
 [
     {
         "input_prompt": "The Kings of France in the 17th Century:",
-        "llm_model_name": "mistral-7b-instruct-v0.2",
+        "llm_model_name": "Meta-Llama-3-8B-Instruct",
         "grammar_file_string": "json",
         "number_of_tokens_to_generate": 500,
         "number_of_completions_to_generate": 3,
@@ -892,7 +895,7 @@ The response will include the generated text completion, the time taken to compu
     },
     {
         "input_prompt": "The Kings of France in the 17th Century:",
-        "llm_model_name": "mistral-7b-instruct-v0.2",
+        "llm_model_name": "Meta-Llama-3-8B-Instruct",
         "grammar_file_string": "json",
         "number_of_tokens_to_generate": 500,
         "number_of_completions_to_generate": 3,
@@ -902,7 +905,7 @@ The response will include the generated text completion, the time taken to compu
     },
     {
         "input_prompt": "The Kings of France in the 17th Century:",
-        "llm_model_name": "mistral-7b-instruct-v0.2",
+        "llm_model_name": "Meta-Llama-3-8B-Instruct",
         "grammar_file_string": "json",
         "number_of_tokens_to_generate": 500,
         "number_of_completions_to_generate": 3,
