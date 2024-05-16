@@ -1,4 +1,4 @@
-from logger_config import setup_logger
+from logger_config import logger
 from database_functions import AsyncSessionLocal
 import socket
 import os
@@ -11,8 +11,6 @@ import faiss
 from typing import Any
 from collections import defaultdict
 from sqlalchemy import text as sql_text
-
-logger = setup_logger()
 
 class suppress_stdout_stderr(object):
     def __enter__(self):

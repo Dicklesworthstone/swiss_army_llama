@@ -1,5 +1,5 @@
 from embeddings_data_models import Base, TextEmbedding, DocumentEmbedding, Document, TokenLevelEmbedding, TokenLevelEmbeddingBundle, TokenLevelEmbeddingBundleCombinedFeatureVector, AudioTranscript
-from logger_config import setup_logger
+from logger_config import logger
 import traceback
 import asyncio
 import random
@@ -11,7 +11,6 @@ from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 from decouple import config
 
-logger = setup_logger()
 db_writer = None
 DATABASE_URL = "sqlite+aiosqlite:///swiss_army_llama.sqlite"
 MAX_RETRIES = config("MAX_RETRIES", default=3, cast=int)

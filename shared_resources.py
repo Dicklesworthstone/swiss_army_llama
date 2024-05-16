@@ -1,7 +1,7 @@
 from misc_utility_functions import  is_redis_running, build_faiss_indexes, suppress_stdout_stderr
 from database_functions import DatabaseWriter, initialize_db
 from ramdisk_functions import setup_ramdisk, copy_models_to_ramdisk, check_that_user_has_required_permissions_to_manage_ramdisks
-from logger_config import setup_logger
+from logger_config import logger
 from aioredlock import Aioredlock
 import aioredis
 import asyncio
@@ -17,7 +17,6 @@ from langchain_community.embeddings import LlamaCppEmbeddings
 from decouple import config
 from fastapi import HTTPException
 
-logger = setup_logger()
 embedding_model_cache = {} # Model cache to store loaded models
 token_level_embedding_model_cache = {} # Model cache to store loaded token-level embedding models
 text_completion_model_cache = {} # Model cache to store loaded text completion models
