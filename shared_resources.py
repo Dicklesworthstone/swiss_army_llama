@@ -169,11 +169,7 @@ def load_model(llm_model_name: str, raise_http_exception: bool = True):
         matching_files.sort(key=os.path.getmtime, reverse=True)
         model_file_path = matching_files[0]
         with suppress_stdout_stderr():
-            gpu_info = is_gpu_available()
-            if gpu_info['gpu_found']:
-                model_instance = LlamaCppEmbeddings(model_path=model_file_path, use_mlock=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, n_gpu_layers=-1) # Load the model with GPU acceleration
-            else:
-                model_instance = LlamaCppEmbeddings(model_path=model_file_path, use_mlock=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS) # Load the model without GPU acceleration
+            model_instance = LlamaCppEmbeddings(model_path=model_file_path, use_mlock=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS) # Load the model without GPU acceleration
         model_instance.client.verbose = USE_VERBOSE
         embedding_model_cache[llm_model_name] = model_instance
         return model_instance
