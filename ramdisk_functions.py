@@ -1,9 +1,10 @@
-from logger_config import logger
+from logger_config import setup_logger
 import os
 import subprocess
 import shutil
 import psutil
 from decouple import config
+logger = setup_logger()
 
 RAMDISK_PATH = config("RAMDISK_PATH", default="/mnt/ramdisk", cast=str)
 RAMDISK_SIZE_IN_GB = config("RAMDISK_SIZE_IN_GB", default=1, cast=int)

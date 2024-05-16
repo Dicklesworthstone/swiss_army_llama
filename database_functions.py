@@ -1,5 +1,5 @@
 from embeddings_data_models import Base, TextEmbedding, DocumentEmbedding, Document, TokenLevelEmbedding, TokenLevelEmbeddingBundle, TokenLevelEmbeddingBundleCombinedFeatureVector, AudioTranscript
-from logger_config import logger
+from logger_config import setup_logger
 import traceback
 import asyncio
 import random
@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 from decouple import config
+logger = setup_logger()
 
 db_writer = None
 DATABASE_URL = "sqlite+aiosqlite:///swiss_army_llama.sqlite"

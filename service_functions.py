@@ -1,4 +1,4 @@
-from logger_config import logger
+from logger_config import setup_logger
 import shared_resources
 from shared_resources import load_model, token_level_embedding_model_cache, text_completion_model_cache, is_gpu_available
 from database_functions import AsyncSessionLocal, DatabaseWriter, execute_with_retry
@@ -31,6 +31,7 @@ from typing import List, Optional, Tuple
 from decouple import config
 from faster_whisper import WhisperModel
 from llama_cpp import Llama, LlamaGrammar
+logger = setup_logger()
 
 SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT = config("SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT", default=8089, cast=int)
 DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="openchat_v3.2_super", cast=str) 
