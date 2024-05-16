@@ -42,9 +42,15 @@ python3 -m venv venv
 source venv/bin/activate
 python3 -m pip install --upgrade pip
 python3 -m pip install wheel
-python3 -m pip install --upgrade setuptools wheel && \
+python3 -m pip install --upgrade setuptools wheel
 pip install -r requirements.txt
 python3 swiss_army_llama.py
+```
+
+Alternatively, you can also just run the included script, which will install PyEnv if it's not already installed on your machine, and then install Python 3.12 and create a virtual environment for you. You can do everything with a single one-liner from scratch on a fresh Ubuntu machine like this:
+
+```bash
+git clone https://github.com/Dicklesworthstone/swiss_army_llama && cd swiss_army_llama && chmod +x install_swiss_army_llama.sh && ./install_swiss_army_llama.sh && pyenv local 3.12 && source venv/bin/activate && python swiss_army_llama.py
 ```
 
 Then open a browser to `<your_static_ip_address>:8089` if you're using a VPS to get to the FastAPI Swagger page at `http://localhost:8089`.
@@ -93,26 +99,31 @@ sudo apt-get install libxml2-dev libxslt1-dev antiword unrtf poppler-utils pstot
 Python Requirements:
 
 ```bash
-fastapi
-pydantic
-uvicorn
-sqlalchemy
-python-decouple
-psutil
+aioredis
+aioredlock
 aiosqlite
 faiss-cpu
-pandas
-PyPDF2
-python-multipart
-python-magic
-langchain
-llama-cpp-python
-httpx
-filelock
 fast_vector_similarity
+fastapi
 faster-whisper
-textract
+filelock
+httpx
+langchain
+langchain-community
+llama-cpp-python
+nvgpu
+pandas
+psutil
+pydantic
+PyPDF2
+pytest
+python-decouple
+python-magic
+python-multipart
 pytz
+sqlalchemy
+textract-py3
+uvicorn
 uvloop
 ```
 
