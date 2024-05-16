@@ -136,10 +136,10 @@ http://localhost:<SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT>
 
 You can configure the service easily by editing the included `.env` file. Here's a list of available configuration options:
 
-- `USE_SECURITY_TOKEN`: Whether to use a hardcoded security token. (e.g., `True`)
-- `USE_PARALLEL_INFERENCE_QUEUE`: Use parallel processing. (e.g., `True`)
+- `USE_SECURITY_TOKEN`: Whether to use a hardcoded security token. (e.g., `1`)
+- `USE_PARALLEL_INFERENCE_QUEUE`: Use parallel processing. (e.g., `1`)
 - `MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS`: Maximum number of parallel inference tasks. (e.g., `30`)
-- `DEFAULT_MODEL_NAME`: Default model name to use. (e.g., `yarn-llama-2-13b-128k`)
+- `DEFAULT_MODEL_NAME`: Default model name to use. (e.g., `Llama-3-8B-Instruct-64k`)
 - `LLM_CONTEXT_SIZE_IN_TOKENS`: Context size in tokens for LLM. (e.g., `512`)
 - `SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT`: Port number for the service. (e.g., `8089`)
 - `UVICORN_NUMBER_OF_WORKERS`: Number of workers for Uvicorn. (e.g., `2`)
