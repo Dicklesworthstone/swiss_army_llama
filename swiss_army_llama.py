@@ -120,7 +120,7 @@ The response will include a JSON object containing the list of available model n
 ### Example Response:
 ```json
 {
-    "model_names": ["Meta-Llama-3-8B-Instruct", "Hermes-2-Pro-Llama-3-Instruct-Merged-DPO-Q4_K_M", "my_super_custom_model"]
+    "model_names": ["Meta-Llama-3-8B-Instruct.Q3_K_S", "Hermes-2-Pro-Llama-3-Instruct-Merged-DPO-Q4_K_M", "my_super_custom_model"]
 }
 ```""",
         response_description="A JSON object containing the list of available model names.")
@@ -130,10 +130,9 @@ async def get_list_of_available_model_names(token: str = None) -> Dict[str, List
     models_dir = os.path.join(RAMDISK_PATH, 'models') if USE_RAMDISK else os.path.join(BASE_DIRECTORY, 'models')
     logger.info(f"Looking for models in: {models_dir}") # Add this line for debugging
     logger.info(f"Directory content: {os.listdir(models_dir)}") # Add this line for debugging
-    model_files = glob.glob(os.path.join(models_dir, "*.bin")) +  glob.glob(os.path.join(models_dir, "*.gguf"))# Find all files with .bin or .gguf extension
-    model_names = [os.path.splitext(os.path.splitext(os.path.basename(model_file))[0])[0] for model_file in model_files] # Remove both extensions
+    model_files = glob.glob(os.path.join(models_dir, "*.bin")) + glob.glob(os.path.join(models_dir, "*.gguf")) # Find all files with .bin or .gguf extension
+    model_names = sorted([os.path.splitext(os.path.basename(model_file))[0] for model_file in model_files]) # Remove both extensions, but ignore other periods in the filename
     return {"model_names": model_names}
-
 
 
 @app.get("/get_list_of_available_bnf_grammars",
@@ -352,7 +351,7 @@ The request must contain the following attributes:
 ```json
 {
     "text": "This is a sample text.",
-    "llm_model_name": "Meta-Llama-3-8B-Instruct"
+    "llm_model_name": "Meta-Llama-3-8B-Instruct.Q3_K_S"
 }
 ```
 
@@ -869,7 +868,7 @@ The request must contain the following attributes:
 ```json
 {
     "input_prompt": "The Kings of France in the 17th Century:",
-    "llm_model_name": "Meta-Llama-3-8B-Instruct",
+    "llm_model_name": "Meta-Llama-3-8B-Instruct.Q3_K_S",
     "temperature": 0.95,
     "grammar_file_string": "json",
     "number_of_tokens_to_generate": 500,
@@ -885,7 +884,7 @@ The response will include the generated text completion, the time taken to compu
 [
     {
         "input_prompt": "The Kings of France in the 17th Century:",
-        "llm_model_name": "Meta-Llama-3-8B-Instruct",
+        "llm_model_name": "Meta-Llama-3-8B-Instruct.Q3_K_S",
         "grammar_file_string": "json",
         "number_of_tokens_to_generate": 500,
         "number_of_completions_to_generate": 3,
@@ -895,7 +894,7 @@ The response will include the generated text completion, the time taken to compu
     },
     {
         "input_prompt": "The Kings of France in the 17th Century:",
-        "llm_model_name": "Meta-Llama-3-8B-Instruct",
+        "llm_model_name": "Meta-Llama-3-8B-Instruct.Q3_K_S",
         "grammar_file_string": "json",
         "number_of_tokens_to_generate": 500,
         "number_of_completions_to_generate": 3,
@@ -905,7 +904,7 @@ The response will include the generated text completion, the time taken to compu
     },
     {
         "input_prompt": "The Kings of France in the 17th Century:",
-        "llm_model_name": "Meta-Llama-3-8B-Instruct",
+        "llm_model_name": "Meta-Llama-3-8B-Instruct.Q3_K_S",
         "grammar_file_string": "json",
         "number_of_tokens_to_generate": 500,
         "number_of_completions_to_generate": 3,
