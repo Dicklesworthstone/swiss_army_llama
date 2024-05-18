@@ -9,7 +9,7 @@ from embeddings_data_models import EmbeddingRequest, SemanticSearchRequest, Adva
 from embeddings_data_models import EmbeddingResponse, SemanticSearchResponse, AdvancedSemanticSearchResponse, SimilarityResponse, AllStringsResponse, AllDocumentsResponse, TextCompletionResponse, AddGrammarResponse
 from embeddings_data_models import ShowLogsIncrementalModel
 from service_functions import get_or_compute_embedding, get_or_compute_transcript, add_model_url, get_or_compute_token_level_embedding_bundle_combined_feature_vector, calculate_token_level_embeddings
-from service_functions import parse_submitted_document_file_into_sentence_strings_func, compute_embeddings_for_document, store_document_embeddings_in_db, generate_completion_from_llm, validate_bnf_grammar_func
+from service_functions import parse_submitted_document_file_into_sentence_strings_func, compute_embeddings_for_document, store_document_embeddings_in_db, generate_completion_from_llm, validate_bnf_grammar_func, convert_document_to_sentences
 from grammar_builder import GrammarBuilder
 from log_viewer_functions import show_logs_incremental_func, show_logs_func
 from uvicorn_config import option
@@ -1243,3 +1243,54 @@ if __name__ == "__main__":
     except Exception:
         logger.exception("Unhandled exception occurred during shutdown.")
         sys.exit(1)
+
+
+
+@app.post("/convert_document_to_sentences/",
+    summary="Convert Document to Sentences",
+    description="""Convert an uploaded document into individual sentences and return various statistics.
+    
+### Parameters:
+- `file`: The uploaded document file (supports plain text, .doc/.docx, PDF files, images using Tesseract OCR, and many other file types supported by the textract library).
+- `token`: Security token (optional).
+
+### Response:
+The response will include a JSON object with the following keys:
+- `individual_sentences`: A list of individual sentences extracted from the document.
+- `total_number_of_sentences`: The total number of sentences extracted.
+- `average_words_per_sentence`: The average number of words per sentence.
+- `total_input_file_size_in_bytes`: The total size of the input file in bytes.
+- `total_text_size_in_characters`: The total size of the text extracted from the document in characters.
+
+### Example Request:
+Submit a file for conversion.
+
+### Example Response:
+```json
+{
+    "individual_sentences": ["This is the first sentence.", "Here is another one."],
+    "total_number_of_sentences": 2,
+    "average_words_per_sentence": 5.0,
+    "total_input_file_size_in_bytes": 2048,
+    "total_text_size_in_characters": 50
+}
+```""",
+    response_description="A JSON object containing the sentences extracted from the document and various statistics."
+)
+async def convert_document_to_sentences(file: UploadFile = File(...), token: str = None):
+    if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    _, extension = os.path.splitext(file.filename)
+    temp_file = tempfile.NamedTemporaryFile(suffix=extension, delete=False)
+    temp_file_path = temp_file.name
+    with open(temp_file_path, 'wb') as buffer:
+        chunk_size = 1024
+        chunk = await file.read(chunk_size)
+        while chunk:
+            buffer.write(chunk)
+            chunk = await file.read(chunk_size)
+    mime = Magic(mime=True)
+    mime_type = mime.from_file(temp_file_path)
+    result = convert_document_to_sentences_func(temp_file_path, mime_type)
+    os.remove(temp_file_path)
+    return JSONResponse(content=result)
