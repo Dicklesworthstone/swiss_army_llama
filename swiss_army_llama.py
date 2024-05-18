@@ -629,12 +629,10 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
                 if faiss_index is None:
                     raise HTTPException(status_code=400, detail=f"No FAISS index found for model: {llm_model_name}")
                 logger.info("Searching for the most similar string in the FAISS index")
-                
                 if request.corpus_identifier_string:
                     associated_texts_by_model = await get_texts_for_corpus_identifier(request.corpus_identifier_string)
                 else:
                     associated_texts_by_model = await get_texts_for_model(llm_model_name)
-
                 similarities, indices = faiss_index.search(input_embedding.reshape(1, -1), num_results)  # Search for num_results similar strings
                 results = []  # Create an empty list to store the results
                 for ii in range(num_results):
@@ -813,10 +811,8 @@ async def get_all_embedding_vectors_for_document(file: UploadFile = File(...),
             hash_obj.update(chunk)
     file_hash = hash_obj.hexdigest()
     logger.info(f"SHA3-256 hash of submitted file: {file_hash}")
-    
     if corpus_identifier_string is None:
         corpus_identifier_string = file_hash
-
     unique_id = f"document_embedding_{file_hash}_{llm_model_name}"
     lock = await shared_resources.lock_manager.lock(unique_id)        
     if lock.valid:    
