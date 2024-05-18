@@ -27,7 +27,7 @@ from sqlalchemy import text as sql_text
 from sqlalchemy import select
 from fastapi import HTTPException, Request, UploadFile, File
 from fastapi.concurrency import run_in_threadpool
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 from decouple import config
 from faster_whisper import WhisperModel
 from llama_cpp import Llama, LlamaGrammar
