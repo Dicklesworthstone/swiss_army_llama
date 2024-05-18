@@ -563,13 +563,14 @@ async def compute_similarity_between_strings(request: SimilarityRequest, req: Re
 
 @app.post("/search_stored_embeddings_with_query_string_for_semantic_similarity/",
         response_model=SemanticSearchResponse,
-        summary="Get Most Similar Strings from Stored Embedddings in Database",
+        summary="Get Most Similar Strings from Stored Embeddings in Database",
         description="""Find the most similar strings in the database to the given input "query" text. This endpoint uses a pre-computed FAISS index to quickly search for the closest matching strings.
 
 ### Parameters:
 - `request`: A JSON object containing the query text, model name, and an optional number of most semantically similar strings to return.
 - `req`: HTTP request object (internal use).
 - `token`: Security token (optional).
+- `corpus_identifier_string`: An optional string identifier to restrict the search to a specific corpus.
 
 ### Request JSON Format:
 The request must contain the following attributes:
@@ -582,7 +583,8 @@ The request must contain the following attributes:
 {
     "query_text": "Find me the most similar string!",
     "llm_model_name": "bge-m3-q8_0",
-    "number_of_most_similar_strings_to_return": 5
+    "number_of_most_similar_strings_to_return": 5,
+    "corpus_identifier_string": "specific_corpus"
 }
 ```
 
@@ -627,6 +629,12 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
                 if faiss_index is None:
                     raise HTTPException(status_code=400, detail=f"No FAISS index found for model: {llm_model_name}")
                 logger.info("Searching for the most similar string in the FAISS index")
+                
+                if request.corpus_identifier_string:
+                    associated_texts_by_model = await get_texts_for_corpus_identifier(request.corpus_identifier_string)
+                else:
+                    associated_texts_by_model = await get_texts_for_model(llm_model_name)
+
                 similarities, indices = faiss_index.search(input_embedding.reshape(1, -1), num_results)  # Search for num_results similar strings
                 results = []  # Create an empty list to store the results
                 for ii in range(num_results):
@@ -638,7 +646,7 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
                 total_time = (response_time - request_time).total_seconds()
                 logger.info(f"Finished searching for the most similar string in the FAISS index in {total_time} seconds. Found {len(results)} results, returning the top {num_results}.")
                 logger.info(f"Found most similar strings for query string {request.query_text}: {results}")
-                return {"query_text": request.query_text, "results": results} # Return the response matching the SemanticSearchResponse model
+                return {"query_text": request.query_text, "results": results}  # Return the response matching the SemanticSearchResponse model
             except Exception as e:
                 logger.error(f"An error occurred while processing the request: {e}")
                 logger.error(traceback.format_exc())  # Print the traceback
@@ -659,6 +667,7 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
 - `request`: A JSON object containing the query text, model name, an optional similarity filter percentage, and an optional number of most similar strings to return.
 - `req`: HTTP request object (internal use).
 - `token`: Security token (optional).
+- `corpus_identifier_string`: An optional string identifier to restrict the search to a specific corpus.
 
 ### Request JSON Format:
 The request must contain the following attributes:
@@ -673,7 +682,8 @@ The request must contain the following attributes:
     "query_text": "Find me the most similar string!",
     "llm_model_name": "bge-m3-q8_0",
     "similarity_filter_percentage": 0.02,
-    "number_of_most_similar_strings_to_return": 5
+    "number_of_most_similar_strings_to_return": 5,
+    "corpus_identifier_string": "specific_corpus"
 }
 ```
 
@@ -761,6 +771,7 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
 - `json_format`: The format of the JSON response (optional, see details below).
 - `send_back_json_or_zip_file`: Whether to return a JSON file or a ZIP file containing the embeddings file (optional, defaults to `zip`).
 - `token`: Security token (optional).
+- `corpus_identifier_string`: An optional string identifier for grouping documents into a specific corpus.
 
 ### JSON Format Options:
 The format of the JSON string returned by the endpoint (default is `records`; these are the options supported by the Pandas `to_json()` function):
@@ -780,11 +791,12 @@ The format of the JSON string returned by the endpoint (default is `records`; th
 async def get_all_embedding_vectors_for_document(file: UploadFile = File(...),
                                                 llm_model_name: str = "bge-m3-q8_0",
                                                 json_format: str = 'records',
+                                                corpus_identifier_string: Optional[str] = None,                                                
                                                 token: str = None,
                                                 send_back_json_or_zip_file: str = 'zip',
                                                 req: Request = None) -> Response:
     client_ip = req.client.host if req else "localhost"
-    request_time = datetime.utcnow() 
+    request_time = datetime.utcnow()
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN): raise HTTPException(status_code=403, detail="Unauthorized")  # noqa: E701
     _, extension = os.path.splitext(file.filename)
     temp_file = tempfile.NamedTemporaryFile(suffix=extension, delete=False)
@@ -801,39 +813,43 @@ async def get_all_embedding_vectors_for_document(file: UploadFile = File(...),
             hash_obj.update(chunk)
     file_hash = hash_obj.hexdigest()
     logger.info(f"SHA3-256 hash of submitted file: {file_hash}")
+    
+    if corpus_identifier_string is None:
+        corpus_identifier_string = file_hash
+
     unique_id = f"document_embedding_{file_hash}_{llm_model_name}"
     lock = await shared_resources.lock_manager.lock(unique_id)        
     if lock.valid:    
         try:        
-            async with AsyncSessionLocal() as session: # Check if the document has been processed before
+            async with AsyncSessionLocal() as session:  # Check if the document has been processed before
                 result = await session.execute(select(DocumentEmbedding).filter(DocumentEmbedding.file_hash == file_hash, DocumentEmbedding.llm_model_name == llm_model_name))
                 existing_document_embedding = result.scalar_one_or_none()
-                if existing_document_embedding: # If the document has been processed before, return the existing result
+                if existing_document_embedding:  # If the document has been processed before, return the existing result
                     logger.info(f"Document {file.filename} has been processed before, returning existing result")
                     json_content = json.dumps(existing_document_embedding.document_embedding_results_json).encode()
-                else: # If the document has not been processed, continue processing
+                else:  # If the document has not been processed, continue processing
                     mime = Magic(mime=True)
                     mime_type = mime.from_file(temp_file_path)            
                     logger.info(f"Received request to extract embeddings for document {file.filename} with MIME type: {mime_type} and size: {os.path.getsize(temp_file_path)} bytes from IP address: {client_ip}")
                     strings = await parse_submitted_document_file_into_sentence_strings_func(temp_file_path, mime_type)
-                    results = await compute_embeddings_for_document(strings, llm_model_name, client_ip, file_hash) # Compute the embeddings and json_content for new documents
+                    results = await compute_embeddings_for_document(strings, llm_model_name, client_ip, file_hash)  # Compute the embeddings and json_content for new documents
                     df = pd.DataFrame(results, columns=['text', 'embedding'])
                     json_content = df.to_json(orient=json_format or 'records').encode()
-                    with open(temp_file_path, 'rb') as file_buffer: # Store the results in the database
+                    with open(temp_file_path, 'rb') as file_buffer:  # Store the results in the database
                         original_file_content = file_buffer.read()
-                    await store_document_embeddings_in_db(file, file_hash, original_file_content, json_content, results, llm_model_name, client_ip, request_time)
+                    await store_document_embeddings_in_db(file, file_hash, original_file_content, json_content, results, llm_model_name, client_ip, request_time, corpus_identifier_string)
             overall_total_time = (datetime.utcnow() - request_time).total_seconds()
             logger.info(f"Done getting all embeddings for document {file.filename} containing {len(strings)} with model {llm_model_name}")
             json_content_length = len(json_content)
             if len(json_content) > 0:
                 logger.info(f"The response took {overall_total_time} seconds to generate, or {overall_total_time / (len(strings)/1000.0)} seconds per thousand input tokens and {overall_total_time / (float(json_content_length)/1000000.0)} seconds per million output characters.")
-            if send_back_json_or_zip_file == 'json': # Assume 'json' response should be sent back
+            if send_back_json_or_zip_file == 'json':  # Assume 'json' response should be sent back
                 logger.info(f"Returning JSON response for document {file.filename} containing {len(strings)} with model {llm_model_name}; first 100 characters out of {json_content_length} total of JSON response: {json_content[:100]}")
-                return JSONResponse(content=json.loads(json_content.decode())) # Decode the content and parse it as JSON
-            else: # Assume 'zip' file should be sent back
+                return JSONResponse(content=json.loads(json_content.decode()))  # Decode the content and parse it as JSON
+            else:  # Assume 'zip' file should be sent back
                 original_filename_without_extension, _ = os.path.splitext(file.filename)
                 json_file_path = f"/tmp/{original_filename_without_extension}.json"
-                with open(json_file_path, 'wb') as json_file: # Write the JSON content as bytes
+                with open(json_file_path, 'wb') as json_file:  # Write the JSON content as bytes
                     json_file.write(json_content)
                 zip_file_path = f"/tmp/{original_filename_without_extension}.zip"
                 with zipfile.ZipFile(zip_file_path, 'w') as zipf:
@@ -1050,6 +1066,7 @@ async def turn_pydantic_model_description_into_bnf_grammar_for_llm(
 - `req`: HTTP Request object for additional request metadata (optional).
 - `token`: Security token for API access (optional).
 - `client_ip`: Client IP for logging and security (optional).
+- `corpus_identifier_string`: An optional string identifier for grouping transcripts into a specific corpus.
 
 ### Examples:
 - Audio File: Submit an audio file for transcription.
@@ -1062,18 +1079,18 @@ async def turn_pydantic_model_description_into_bnf_grammar_for_llm(
 - Unauthorized requests are logged and result in a 403 status.
 - All other errors result in a 500 status and are logged with their tracebacks.""",
         response_description="A JSON object containing the complete transcription details, computational times, and an optional URL for downloading a ZIP file of the document embeddings.")
-async def compute_transcript_with_whisper_from_audio(
-        file: UploadFile, 
-        compute_embeddings_for_resulting_transcript_document: Optional[bool] = True, 
-        llm_model_name: Optional[str] = DEFAULT_MODEL_NAME, 
-        req: Request = None, 
-        token: str = None, 
-        client_ip: str = None):
+async def compute_transcript_with_whisper_from_audio(file: UploadFile,
+                                                    compute_embeddings_for_resulting_transcript_document: Optional[bool] = True,
+                                                    llm_model_name: Optional[str] = DEFAULT_MODEL_NAME,
+                                                    corpus_identifier_string: Optional[str] = None,
+                                                    req: Request = None,
+                                                    token: str = None,
+                                                    client_ip: str = None):
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
-        logger.warning(f"Unauthorized request from client IP {client_ip}")
+        logger.warning(f"Unauthorized request from client_ip {client_ip}")
         raise HTTPException(status_code=403, detail="Unauthorized")
     try:
-        audio_transcript = await get_or_compute_transcript(file, compute_embeddings_for_resulting_transcript_document, llm_model_name, req)
+        audio_transcript = await get_or_compute_transcript(file, compute_embeddings_for_resulting_transcript_document, llm_model_name, req, corpus_identifier_string)
         return audio_transcript
     except Exception as e:
         logger.error(f"An error occurred while processing the request: {e}")

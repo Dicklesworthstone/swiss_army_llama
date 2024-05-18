@@ -90,7 +90,7 @@ async def _get_transcript_from_db(audio_file_hash: str) -> Optional[dict]:
             return AudioTranscriptResponse(**audio_transcript_response)
         return None
 
-async def save_transcript_to_db(audio_file_hash, audio_file_name, audio_file_size_mb, transcript_segments, info, ip_address, request_time, response_time, total_time, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts):
+async def save_transcript_to_db(audio_file_hash, audio_file_name, audio_file_size_mb, transcript_segments, info, ip_address, request_time, response_time, total_time, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, corpus_identifier_string):
     existing_transcript = await get_transcript_from_db(audio_file_hash)
     if existing_transcript:
         return existing_transcript
@@ -105,10 +105,10 @@ async def save_transcript_to_db(audio_file_hash, audio_file_name, audio_file_siz
         ip_address=ip_address,
         request_time=request_time,
         response_time=response_time,
-        total_time=total_time
+        total_time=total_time,
+        corpus_identifier_string=corpus_identifier_string
     )
     await shared_resources.db_writer.enqueue_write([audio_transcript])
-
 
 async def compute_and_store_transcript_embeddings(audio_file_name, list_of_transcript_sentences, llm_model_name, ip_address, combined_transcript_text, req: Request):
     logger.info(f"Now computing embeddings for entire transcript of {audio_file_name}...")
@@ -130,7 +130,7 @@ async def compute_and_store_transcript_embeddings(audio_file_name, list_of_trans
     await store_document_embeddings_in_db(fake_upload_file, file_hash, combined_transcript_text.encode(), json.dumps(computed_embeddings).encode(), computed_embeddings, llm_model_name, ip_address, datetime.utcnow())
     return full_download_url
 
-async def compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio_file_path, audio_file_name, audio_file_size_mb, ip_address,  req: Request, compute_embeddings_for_resulting_transcript_document=True, llm_model_name=DEFAULT_MODEL_NAME):
+async def compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio_file_path, audio_file_name, audio_file_size_mb, ip_address, req: Request, compute_embeddings_for_resulting_transcript_document=True, llm_model_name=DEFAULT_MODEL_NAME, corpus_identifier_string: str):
     model_size = "large-v2"
     logger.info(f"Loading Whisper model {model_size}...")
     num_workers = 1 if psutil.virtual_memory().total < 32 * (1024 ** 3) else min(4, max(1, int((psutil.virtual_memory().total - 32 * (1024 ** 3)) / (4 * (1024 ** 3))))) # Only use more than 1 worker if there is at least 32GB of RAM; then use 1 worker per additional 4GB of RAM up to 4 workers max
@@ -153,17 +153,21 @@ async def compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio
         segment_details.append(details)
     combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, list_of_transcript_sentences = merge_transcript_segments_into_combined_text(segment_details)    
     if compute_embeddings_for_resulting_transcript_document:
-        download_url = await compute_and_store_transcript_embeddings(audio_file_name, list_of_transcript_sentences, llm_model_name, ip_address, combined_transcript_text, req)
+        download_url = await compute_and_store_transcript_embeddings(audio_file_name, list_of_transcript_sentences, llm_model_name, ip_address, combined_transcript_text, req, corpus_identifier_string)
     else:
         download_url = ''
     response_time = datetime.utcnow()
     total_time = (response_time - request_time).total_seconds()
     logger.info(f"Transcript computed in {total_time} seconds.")
-    await save_transcript_to_db(audio_file_hash, audio_file_name, audio_file_size_mb, segment_details, info, ip_address, request_time, response_time, total_time, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts)
+    await save_transcript_to_db(audio_file_hash, audio_file_name, audio_file_size_mb, segment_details, info, ip_address, request_time, response_time, total_time, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, corpus_identifier_string)
     info_dict = info._asdict()
     return segment_details, info_dict, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, request_time, response_time, total_time, download_url
     
-async def get_or_compute_transcript(file: UploadFile, compute_embeddings_for_resulting_transcript_document: bool, llm_model_name: str, req: Request = None) -> dict:
+async def get_or_compute_transcript(file: UploadFile,
+                                    compute_embeddings_for_resulting_transcript_document: bool,
+                                    llm_model_name: str,
+                                    req: Request = None,
+                                    corpus_identifier_string: Optional[str] = None) -> dict:
     request_time = datetime.utcnow()
     ip_address = req.client.host if req else "127.0.0.1"
     file_contents = await file.read()
@@ -183,7 +187,11 @@ async def get_or_compute_transcript(file: UploadFile, compute_embeddings_for_res
             with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
                 shutil.copyfileobj(file.file, tmp_file)
                 audio_file_name = tmp_file.name
-            segment_details, info, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, request_time, response_time, total_time, download_url = await compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio_file_name, file.filename, audio_file_size_mb, ip_address, req, compute_embeddings_for_resulting_transcript_document, llm_model_name)
+
+            if corpus_identifier_string is None:
+                corpus_identifier_string = audio_file_hash
+
+            segment_details, info, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, request_time, response_time, total_time, download_url = await compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio_file_name, file.filename, audio_file_size_mb, ip_address, req, compute_embeddings_for_resulting_transcript_document, llm_model_name, corpus_identifier_string)
             audio_transcript_response = {
                 "audio_file_hash": audio_file_hash,
                 "audio_file_name": file.filename,
@@ -196,14 +204,15 @@ async def get_or_compute_transcript(file: UploadFile, compute_embeddings_for_res
                 "request_time": request_time,
                 "response_time": response_time,
                 "total_time": total_time,
-                "url_to_download_zip_file_of_embeddings": download_url if compute_embeddings_for_resulting_transcript_document else ""
+                "url_to_download_zip_file_of_embeddings": download_url if compute_embeddings_for_resulting_transcript_document else "",
+                "corpus_identifier_string": corpus_identifier_string
             }
             os.remove(audio_file_name)
             return AudioTranscriptResponse(**audio_transcript_response)
         finally:
             await shared_resources.lock_manager.unlock(lock)    
     else:
-        return {"status": "already processing"}                
+        return {"status": "already processing"}               
     
     
 # Core embedding functions start here:    
@@ -514,10 +523,18 @@ async def _get_document_from_db(file_hash: str):
         result = await session.execute(select(Document).filter(Document.document_hash == file_hash))
         return result.scalar_one_or_none()
 
-async def store_document_embeddings_in_db(file: File, file_hash: str, original_file_content: bytes, json_content: bytes, results: List[Tuple[str, np.array]], llm_model_name: str, client_ip: str, request_time: datetime):
-    document = await _get_document_from_db(file_hash) # First, check if a Document with the same hash already exists
-    if not document: # If not, create a new Document object
-        document = Document(document_hash=file_hash, llm_model_name=llm_model_name)
+async def store_document_embeddings_in_db(file: File,
+                                        file_hash: str,
+                                        original_file_content: bytes,
+                                        json_content: bytes,
+                                        results: List[Tuple[str, np.array]],
+                                        llm_model_name: str,
+                                        client_ip: str,
+                                        request_time: datetime,
+                                        corpus_identifier_string: str):
+    document = await _get_document_from_db(file_hash)  # First, check if a Document with the same hash already exists
+    if not document:  # If not, create a new Document object
+        document = Document(document_hash=file_hash, llm_model_name=llm_model_name, corpus_identifier_string=corpus_identifier_string)
         await shared_resources.db_writer.enqueue_write([document])    
     document_embedding = DocumentEmbedding(
         filename=file.filename,
@@ -532,7 +549,7 @@ async def store_document_embeddings_in_db(file: File, file_hash: str, original_f
         total_time=(datetime.utcnow() - request_time).total_seconds()
     )
     document.document_embeddings.append(document_embedding)  # Associate it with the Document
-    document.update_hash() # This will trigger the SQLAlchemy event to update the document_hash
+    document.update_hash()  # This will trigger the SQLAlchemy event to update the document_hash
     await shared_resources.db_writer.enqueue_write([document, document_embedding])  # Enqueue the write operation for the document embedding
     write_operations = []  # Collect text embeddings to write
     logger.info(f"Storing {len(results)} text embeddings in database")
@@ -552,6 +569,7 @@ async def store_document_embeddings_in_db(file: File, file_hash: str, original_f
         else:
             write_operations.append(embedding_entry)
     await shared_resources.db_writer.enqueue_write(write_operations)  # Enqueue the write operation for text embeddings
+
 
 def load_text_completion_model(llm_model_name: str, raise_http_exception: bool = True):
     global USE_VERBOSE
