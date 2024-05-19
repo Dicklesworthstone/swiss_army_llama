@@ -678,7 +678,7 @@ def validate_bnf_grammar_func(grammar):
             return False, f"Used rule {rule} is not defined."
     return True, "Valid BNF Grammar"
 
-def convert_document_to_sentences(file_path: str, mime_type: str) -> Dict[str, Any]:
+def convert_document_to_sentences_func(file_path: str, mime_type: str) -> Dict[str, Any]:
     # Extract text from document
     if mime_type.startswith('text/'):
         with open(file_path, 'r') as buffer:
