@@ -684,7 +684,7 @@ def validate_bnf_grammar_func(grammar):
             return False, f"Used rule {rule} is not defined."
     return True, "Valid BNF Grammar"
 
-def convert_document_to_sentences_func(file_path: str, mime_type: str) -> Dict[str, Any]:
+async def convert_document_to_sentences_func(file_path: str, mime_type: str) -> Dict[str, Any]:
     sentences = await parse_submitted_document_file_into_sentence_strings_func(file_path, mime_type)
     total_number_of_sentences = len(sentences)
     total_input_file_size_in_bytes = os.path.getsize(file_path)
