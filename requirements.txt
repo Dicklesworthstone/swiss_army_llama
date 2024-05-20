@@ -10,6 +10,7 @@ httpx
 langchain
 langchain-community
 llama-cpp-python
+magika
 mutagen
 nvgpu
 pandas
@@ -18,7 +19,6 @@ pydantic
 PyPDF2
 pytest
 python-decouple
-python-magic
 python-multipart
 pytz
 sqlalchemy

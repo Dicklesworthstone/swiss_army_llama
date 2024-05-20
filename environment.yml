@@ -4,25 +4,30 @@ channels:
   - defaults
 dependencies:
   - python=3.11
-  - fastapi
-  - pydantic
-  - uvicorn
-  - sqlalchemy
-  - python-decouple
-  - psutil
+  - aioredis
+  - aioredlock
   - aiosqlite
   - faiss-cpu
-  - pandas
-  - PyPDF2
-  - python-multipart
-  - python-magic
-  - langchain
-  - scikit-learn
-  - llama-cpp-python
-  - httpx
-  - filelock
   - fast_vector_similarity
+  - fastapi
   - faster-whisper
-  - textract
+  - filelock
+  - httpx
+  - langchain
+  - langchain-community
+  - llama-cpp-python
+  - magika
+  - mutagen
+  - nvgpu
+  - pandas
+  - psutil
+  - pydantic
+  - PyPDF2
+  - pytest
+  - python-decouple
+  - python-multipart
   - pytz
-  
+  - sqlalchemy
+  - textract-py3
+  - uvicorn
+  - uvloop

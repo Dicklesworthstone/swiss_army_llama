@@ -32,9 +32,11 @@ from decouple import config
 from faster_whisper import WhisperModel
 from llama_cpp import Llama, LlamaGrammar
 from mutagen import File as MutagenFile
+from magika import Magika
 import httpx
 
 logger = setup_logger()
+magika = Magika()
 
 SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT = config("SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT", default=8089, cast=int)
 DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="openchat_v3.2_super", cast=str) 
@@ -682,11 +684,13 @@ def validate_bnf_grammar_func(grammar):
             return False, f"Used rule {rule} is not defined."
     return True, "Valid BNF Grammar"
 
-def convert_document_to_sentences_func(file_path: str, mime_type: str) -> Dict[str, Any]:
-    # Extract text from document
-    if mime_type.startswith('text/'):
-        with open(file_path, 'r') as buffer:
-            content = buffer.read()
+def convert_document_to_sentences_func(file_path: str) -> Dict[str, Any]:
+    with open(file_path, 'rb') as file:
+        input_data_binary = file.read()
+    result = magika.identify_bytes(input_data_binary)
+    detected_data_type = result.output.ct_label
+    if detected_data_type.startswith('text/'):
+        content = input_data_binary.decode('utf-8')
     else:
         try:
             content = textract.process(file_path).decode('utf-8')
@@ -694,17 +698,15 @@ def convert_document_to_sentences_func(file_path: str, mime_type: str) -> Dict[s
             try:
                 content = textract.process(file_path).decode('unicode_escape')
             except Exception as e:
-                raise ValueError(f"Error processing file: {e}, mime_type: {mime_type}")
+                raise ValueError(f"Error processing file: {e}, detected_data_type: {detected_data_type}")
         except Exception as e:
-            raise ValueError(f"Error processing file: {e}, mime_type: {mime_type}")
-    # Split content into sentences
+            raise ValueError(f"Error processing file: {e}, detected_data_type: {detected_data_type}")
     sentences = sophisticated_sentence_splitter(content)
     total_number_of_sentences = len(sentences)
     total_input_file_size_in_bytes = os.path.getsize(file_path)
     total_text_size_in_characters = len(content)
     total_words = sum(len(sentence.split()) for sentence in sentences)
     average_words_per_sentence = total_words / total_number_of_sentences if total_number_of_sentences else 0
-    # Create result dictionary
     result = {
         "individual_sentences": sentences,
         "total_number_of_sentences": total_number_of_sentences,

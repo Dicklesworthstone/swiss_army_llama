@@ -118,7 +118,6 @@ pydantic
 PyPDF2
 pytest
 python-decouple
-python-magic
 python-multipart
 pytz
 sqlalchemy
