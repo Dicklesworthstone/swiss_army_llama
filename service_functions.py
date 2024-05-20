@@ -688,7 +688,7 @@ def convert_document_to_sentences_func(file_path: str) -> Dict[str, Any]:
     with open(file_path, 'rb') as file:
         input_data_binary = file.read()
     result = magika.identify_bytes(input_data_binary)
-    detected_data_type = result['output']['ct_label']
+    detected_data_type = result.output.ct_label
     try:
         if detected_data_type.startswith('text/'):
             content = input_data_binary.decode('utf-8')
