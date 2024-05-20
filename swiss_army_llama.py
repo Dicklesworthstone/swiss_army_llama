@@ -43,9 +43,11 @@ import faiss
 import pandas as pd
 import fast_vector_similarity as fvs
 import uvloop
+from magika import Magika
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 logger = setup_logger()
+magika = Magika()
 
 gpu_check_results = is_gpu_available()
 logger.info(f"\nGPU check results:\n {gpu_check_results}\n")
@@ -1351,6 +1353,7 @@ async def convert_document_to_sentences(
 ):
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
         raise HTTPException(status_code=403, detail="Unauthorized")
+    temp_file_path = None
     if file:
         _, extension = os.path.splitext(file.filename)
         temp_file = tempfile.NamedTemporaryFile(suffix=extension, delete=False)
@@ -1365,6 +1368,12 @@ async def convert_document_to_sentences(
         temp_file_path = await download_file(url, size, hash)
     else:
         raise HTTPException(status_code=400, detail="Invalid input. Provide either a file or URL with hash and size.")
-    result = convert_document_to_sentences_func(temp_file_path)
-    os.remove(temp_file_path)
+    with open(temp_file_path, 'rb') as file:
+        input_data_binary = file.read()
+    result = magika.identify_bytes(input_data_binary)
+    detected_data_type = result.output.ct_label
+    try:
+        result = convert_document_to_sentences_func(temp_file_path, detected_data_type)
+    finally:
+        os.remove(temp_file_path)
     return JSONResponse(content=result)

@@ -684,31 +684,41 @@ def validate_bnf_grammar_func(grammar):
             return False, f"Used rule {rule} is not defined."
     return True, "Valid BNF Grammar"
 
-def convert_document_to_sentences_func(file_path: str) -> Dict[str, Any]:
-    with open(file_path, 'rb') as file:
-        input_data_binary = file.read()
-    result = magika.identify_bytes(input_data_binary)
-    detected_data_type = result.output.ct_label
-    try:
-        if detected_data_type.startswith('text/'):
-            content = input_data_binary.decode('utf-8')
-        else:
-            content = textract.process(file_path).decode('utf-8')
-    except UnicodeDecodeError:
+def convert_document_to_sentences_func(file_path: str, mime_type: str) -> Dict[str, Any]:
+    # Extract text from the document
+    if mime_type.startswith('text/'):
+        with open(file_path, 'r') as buffer:
+            content = buffer.read()
+    else:
         try:
-            content = textract.process(file_path).decode('unicode_escape')
+            content = textract.process(file_path).decode('utf-8')
+        except UnicodeDecodeError:
+            try:
+                content = textract.process(file_path).decode('unicode_escape')
+            except Exception as e:
+                raise ValueError(f"Error processing file: {e}, mime_type: {mime_type}")
         except Exception as e:
-            raise ValueError(f"Error processing file: {e}, detected_data_type: {detected_data_type}")
-    except Exception as e:
-        raise ValueError(f"Error processing file: {e}, detected_data_type: {detected_data_type}")
+            raise ValueError(f"Error processing file: {e}, mime_type: {mime_type}")
+    # Split content into sentences
     sentences = sophisticated_sentence_splitter(content)
+    # Handle PDFs with OCR if no sentences found
+    if len(sentences) == 0 and file_path.lower().endswith('.pdf'):
+        try:
+            content = textract.process(file_path, method='tesseract').decode('utf-8')
+            sentences = sophisticated_sentence_splitter(content)
+        except Exception as e:
+            raise ValueError(f"Error processing file with OCR: {e}")
+    # Raise error if no sentences found
+    if len(sentences) == 0:
+        raise ValueError("No sentences found in the document")
     total_number_of_sentences = len(sentences)
     total_input_file_size_in_bytes = os.path.getsize(file_path)
     total_text_size_in_characters = len(content)
     total_words = sum(len(sentence.split()) for sentence in sentences)
     average_words_per_sentence = total_words / total_number_of_sentences if total_number_of_sentences else 0
+    # Create result dictionary
     result = {
-        "individual_sentences": sentences,
+        "individual_sentences": [s.strip() for s in sentences if len(s.strip()) > 0],
         "total_number_of_sentences": total_number_of_sentences,
         "average_words_per_sentence": average_words_per_sentence,
         "total_input_file_size_in_bytes": total_input_file_size_in_bytes,
