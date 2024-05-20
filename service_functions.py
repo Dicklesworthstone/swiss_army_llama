@@ -32,6 +32,7 @@ from decouple import config
 from faster_whisper import WhisperModel
 from llama_cpp import Llama, LlamaGrammar
 from mutagen import File as MutagenFile
+import httpx
 
 logger = setup_logger()
 
