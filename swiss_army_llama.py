@@ -19,7 +19,6 @@ import json
 import os 
 import signal
 import re
-import hashlib
 import tempfile
 import traceback
 import zipfile
@@ -825,7 +824,7 @@ async def get_all_embedding_vectors_for_document(
         temp_file_path = await download_file(url, size, hash)
     else:
         raise HTTPException(status_code=400, detail="Invalid input. Provide either a file or URL with hash and size.")
-    hash_obj = hashlib.sha3_256()
+    hash_obj = sha3_256()
     with open(temp_file_path, 'rb') as buffer:
         for chunk in iter(lambda: buffer.read(chunk_size), b''):
             hash_obj.update(chunk)

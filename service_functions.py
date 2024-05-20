@@ -716,7 +716,7 @@ def convert_document_to_sentences_func(file_path: str, mime_type: str) -> Dict[s
 async def download_file(url: str, expected_size: int, expected_hash: str) -> str:
     temp_file = tempfile.NamedTemporaryFile(delete=False)
     temp_file_path = temp_file.name
-    hash_obj = hashlib.sha3_256()
+    hash_obj = sha3_256()
     downloaded_size = 0
     async with httpx.AsyncClient() as client:
         async with client.stream("GET", url) as response:
