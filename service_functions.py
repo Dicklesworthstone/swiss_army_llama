@@ -688,19 +688,19 @@ def convert_document_to_sentences_func(file_path: str) -> Dict[str, Any]:
     with open(file_path, 'rb') as file:
         input_data_binary = file.read()
     result = magika.identify_bytes(input_data_binary)
-    detected_data_type = result.output.ct_label
-    if detected_data_type.startswith('text/'):
-        content = input_data_binary.decode('utf-8')
-    else:
-        try:
+    detected_data_type = result['output']['ct_label']
+    try:
+        if detected_data_type.startswith('text/'):
+            content = input_data_binary.decode('utf-8')
+        else:
             content = textract.process(file_path).decode('utf-8')
-        except UnicodeDecodeError:
-            try:
-                content = textract.process(file_path).decode('unicode_escape')
-            except Exception as e:
-                raise ValueError(f"Error processing file: {e}, detected_data_type: {detected_data_type}")
+    except UnicodeDecodeError:
+        try:
+            content = textract.process(file_path).decode('unicode_escape')
         except Exception as e:
             raise ValueError(f"Error processing file: {e}, detected_data_type: {detected_data_type}")
+    except Exception as e:
+        raise ValueError(f"Error processing file: {e}, detected_data_type: {detected_data_type}")
     sentences = sophisticated_sentence_splitter(content)
     total_number_of_sentences = len(sentences)
     total_input_file_size_in_bytes = os.path.getsize(file_path)
