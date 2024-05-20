@@ -709,3 +709,28 @@ def convert_document_to_sentences_func(file_path: str, mime_type: str) -> Dict[s
         "total_text_size_in_characters": total_text_size_in_characters
     }
     return result
+
+async def download_file(url: str, expected_size: int, expected_hash: str) -> str:
+    temp_file = tempfile.NamedTemporaryFile(delete=False)
+    temp_file_path = temp_file.name
+    hash_obj = hashlib.sha3_256()
+    downloaded_size = 0
+    async with httpx.AsyncClient() as client:
+        async with client.stream("GET", url) as response:
+            if response.status_code != 200:
+                raise HTTPException(status_code=400, detail="Failed to download file")
+            async for chunk in response.aiter_bytes():
+                downloaded_size += len(chunk)
+                if downloaded_size > expected_size:
+                    os.remove(temp_file_path)
+                    raise HTTPException(status_code=400, detail="Downloaded file size exceeds expected size")
+                temp_file.write(chunk)
+                hash_obj.update(chunk)
+    temp_file.close()
+    if downloaded_size != expected_size:
+        os.remove(temp_file_path)
+        raise HTTPException(status_code=400, detail="Downloaded file size does not match expected size")
+    if hash_obj.hexdigest() != expected_hash:
+        os.remove(temp_file_path)
+        raise HTTPException(status_code=400, detail="File hash mismatch")
+    return temp_file_path
