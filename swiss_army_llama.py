@@ -1371,9 +1371,9 @@ async def convert_document_to_sentences(
     with open(temp_file_path, 'rb') as file:
         input_data_binary = file.read()
     result = magika.identify_bytes(input_data_binary)
-    detected_data_type = result.output.ct_label
+    mime_type = result.output.mime_type
     try:
-        result = convert_document_to_sentences_func(temp_file_path, detected_data_type)
+        result = convert_document_to_sentences_func(temp_file_path, mime_type)
     finally:
         os.remove(temp_file_path)
     return JSONResponse(content=result)

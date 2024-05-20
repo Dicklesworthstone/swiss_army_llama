@@ -685,40 +685,14 @@ def validate_bnf_grammar_func(grammar):
     return True, "Valid BNF Grammar"
 
 def convert_document_to_sentences_func(file_path: str, mime_type: str) -> Dict[str, Any]:
-    # Extract text from the document
-    if mime_type.startswith('text/'):
-        with open(file_path, 'r') as buffer:
-            content = buffer.read()
-    else:
-        try:
-            content = textract.process(file_path).decode('utf-8')
-        except UnicodeDecodeError:
-            try:
-                content = textract.process(file_path).decode('unicode_escape')
-            except Exception as e:
-                raise ValueError(f"Error processing file: {e}, mime_type: {mime_type}")
-        except Exception as e:
-            raise ValueError(f"Error processing file: {e}, mime_type: {mime_type}")
-    # Split content into sentences
-    sentences = sophisticated_sentence_splitter(content)
-    # Handle PDFs with OCR if no sentences found
-    if len(sentences) == 0 and file_path.lower().endswith('.pdf'):
-        try:
-            content = textract.process(file_path, method='tesseract').decode('utf-8')
-            sentences = sophisticated_sentence_splitter(content)
-        except Exception as e:
-            raise ValueError(f"Error processing file with OCR: {e}")
-    # Raise error if no sentences found
-    if len(sentences) == 0:
-        raise ValueError("No sentences found in the document")
+    sentences = await parse_submitted_document_file_into_sentence_strings_func(file_path, mime_type)
     total_number_of_sentences = len(sentences)
     total_input_file_size_in_bytes = os.path.getsize(file_path)
-    total_text_size_in_characters = len(content)
+    total_text_size_in_characters = sum(len(sentence) for sentence in sentences)
     total_words = sum(len(sentence.split()) for sentence in sentences)
     average_words_per_sentence = total_words / total_number_of_sentences if total_number_of_sentences else 0
-    # Create result dictionary
     result = {
-        "individual_sentences": [s.strip() for s in sentences if len(s.strip()) > 0],
+        "individual_sentences": sentences,
         "total_number_of_sentences": total_number_of_sentences,
         "average_words_per_sentence": average_words_per_sentence,
         "total_input_file_size_in_bytes": total_input_file_size_in_bytes,
