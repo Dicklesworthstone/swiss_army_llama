@@ -10,6 +10,7 @@ httpx
 langchain
 langchain-community
 llama-cpp-python
+mutagen
 nvgpu
 pandas
 psutil

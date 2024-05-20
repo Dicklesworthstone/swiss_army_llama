@@ -31,6 +31,8 @@ from typing import List, Optional, Tuple, Dict, Any
 from decouple import config
 from faster_whisper import WhisperModel
 from llama_cpp import Llama, LlamaGrammar
+from mutagen import File as MutagenFile
+
 logger = setup_logger()
 
 SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT = config("SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT", default=8089, cast=int)
@@ -45,6 +47,7 @@ USE_PARALLEL_INFERENCE_QUEUE = config("USE_PARALLEL_INFERENCE_QUEUE", default=Fa
 MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS = config("MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS", default=10, cast=int)
 USE_RAMDISK = config("USE_RAMDISK", default=False, cast=bool)
 USE_VERBOSE = config("USE_VERBOSE", default=False, cast=bool)
+USE_RESOURCE_MONITORING = config("USE_RESOURCE_MONITORING", default=1, cast=bool)
 RAMDISK_PATH = config("RAMDISK_PATH", default="/mnt/ramdisk", cast=str)
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 
@@ -734,3 +737,112 @@ async def download_file(url: str, expected_size: int, expected_hash: str) -> str
         os.remove(temp_file_path)
         raise HTTPException(status_code=400, detail="File hash mismatch")
     return temp_file_path
+
+def get_audio_duration_seconds(file_path: str) -> float:
+    audio = MutagenFile(file_path)
+    if audio is None or not hasattr(audio.info, 'length'):
+        raise ValueError("Could not determine the length of the audio file.")
+    return audio.info.length
+
+def start_resource_monitoring(endpoint_name: str, input_data: Dict[str, Any], client_ip: str) -> Dict[str, Any]:
+    if not USE_RESOURCE_MONITORING:
+        return {}
+    # Capture initial system resource usage
+    initial_memory = psutil.virtual_memory().used
+    initial_cpu_times = psutil.cpu_times_percent(interval=None)
+    start_time = time.time()
+    # Placeholder for input-specific details
+    request_details = {}
+    # Extract endpoint-specific input details
+    if endpoint_name == "get_embedding_vector_for_string":
+        text = input_data.get("text", "")
+        request_details = {
+            "num_words": len(text.split()),
+            "num_characters": len(text)
+        }
+    elif endpoint_name == "get_all_embedding_vectors_for_document":
+        sentences = input_data.get("sentences", [])
+        file_size_mb = input_data.get("file_size_mb", 0)
+        mime_type = input_data.get("mime_type", "")
+        request_details = {
+            "num_sentences": len(sentences),
+            "total_words": sum(len(sentence.split()) for sentence in sentences),
+            "total_characters": sum(len(sentence) for sentence in sentences),
+            "file_size_mb": file_size_mb,
+            "mime_type": mime_type
+        }
+    elif endpoint_name == "compute_transcript_with_whisper_from_audio":
+        transcript_details = input_data.get("transcript_details", {})
+        file_size_mb = input_data.get("file_size_mb", 0)
+        audio_duration_seconds = input_data.get("audio_duration_seconds", 0)
+        request_details = {
+            "file_size_mb": file_size_mb,
+            "audio_duration_seconds": audio_duration_seconds,
+            "num_sentences": len(transcript_details.get("sentences", [])),
+            "total_words": sum(len(sentence.split()) for sentence in transcript_details.get("sentences", [])),
+            "total_characters": sum(len(sentence) for sentence in transcript_details.get("sentences", []))
+        }
+    elif endpoint_name == "get_text_completions_from_input_prompt":
+        input_prompt = input_data.get("input_prompt", "")
+        request_details = {
+            "num_words": len(input_prompt.split()),
+            "num_characters": len(input_prompt),
+            "llm_model_name": input_data.get("llm_model_name", ""),
+            "temperature": input_data.get("temperature", 0.7),
+            "grammar_file_string": input_data.get("grammar_file_string", ""),
+            "number_of_completions_to_generate": input_data.get("number_of_completions_to_generate", 1),
+            "number_of_tokens_to_generate": input_data.get("number_of_tokens_to_generate", 1000)
+        }
+    # Store initial state and request details in the context
+    context = {
+        "endpoint_name": endpoint_name,
+        "start_time": start_time,
+        "initial_memory": initial_memory,
+        "initial_cpu_times": initial_cpu_times,
+        "request_details": request_details,
+        "client_ip": client_ip,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(start_time))
+    }
+    return context
+
+def end_resource_monitoring(context: Dict[str, Any]):
+    if not USE_RESOURCE_MONITORING or not context:
+        return
+    # Retrieve initial state from context
+    endpoint_name = context["endpoint_name"]
+    start_time = context["start_time"]
+    initial_memory = context["initial_memory"]
+    initial_cpu_times = context["initial_cpu_times"]
+    request_details = context["request_details"]
+    client_ip = context["client_ip"]
+    timestamp = context["timestamp"]
+    # Capture final system resource usage
+    end_time = time.time()
+    final_memory = psutil.virtual_memory().used
+    final_cpu_times = psutil.cpu_times_percent(interval=None)
+    # Calculate the metrics
+    memory_used = final_memory - initial_memory
+    cpu_used = {
+        "user": final_cpu_times.user - initial_cpu_times.user,
+        "system": final_cpu_times.system - initial_cpu_times.system,
+        "idle": final_cpu_times.idle - initial_cpu_times.idle
+    }
+    time_taken = end_time - start_time
+    # Combine all metrics into a result dictionary
+    result = {
+        "timestamp": timestamp,
+        "client_ip": client_ip,
+        "endpoint_name": endpoint_name,
+        "request_details": request_details,
+        "memory_used": memory_used,
+        "cpu_used": cpu_used,
+        "time_taken": time_taken
+    }
+    # Append the result to the log file
+    log_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resource_monitoring_logs.json")
+    try:
+        with open(log_file_path, "a") as log_file:
+            log_file.write(json.dumps(result) + "\n")
+    except Exception as e:
+        logger.error(f"Failed to write resource monitoring log: {e}")
+    logger.info(f"Request data and system resources used: {result}")

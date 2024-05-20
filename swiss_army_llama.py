@@ -8,8 +8,8 @@ from embeddings_data_models import DocumentEmbedding, TokenLevelEmbeddingBundle
 from embeddings_data_models import EmbeddingRequest, SemanticSearchRequest, AdvancedSemanticSearchRequest, SimilarityRequest, TextCompletionRequest, AddGrammarRequest
 from embeddings_data_models import EmbeddingResponse, SemanticSearchResponse, AdvancedSemanticSearchResponse, SimilarityResponse, AllStringsResponse, AllDocumentsResponse, TextCompletionResponse, AddGrammarResponse
 from embeddings_data_models import ShowLogsIncrementalModel
-from service_functions import get_or_compute_embedding, get_or_compute_transcript, add_model_url, get_or_compute_token_level_embedding_bundle_combined_feature_vector, calculate_token_level_embeddings, download_file
-from service_functions import parse_submitted_document_file_into_sentence_strings_func, compute_embeddings_for_document, store_document_embeddings_in_db, generate_completion_from_llm, validate_bnf_grammar_func, convert_document_to_sentences_func
+from service_functions import get_or_compute_embedding, get_or_compute_transcript, add_model_url, get_or_compute_token_level_embedding_bundle_combined_feature_vector, calculate_token_level_embeddings, download_file, start_resource_monitoring, end_resource_monitoring
+from service_functions import parse_submitted_document_file_into_sentence_strings_func, compute_embeddings_for_document, store_document_embeddings_in_db, generate_completion_from_llm, validate_bnf_grammar_func, convert_document_to_sentences_func, get_audio_duration_seconds
 from grammar_builder import GrammarBuilder
 from log_viewer_functions import show_logs_incremental_func, show_logs_func
 from uvicorn_config import option
@@ -80,6 +80,7 @@ else:
     USE_SECURITY_TOKEN = False
 DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="Meta-Llama-3-8B-Instruct.Q3_K_S", cast=str) 
 USE_RAMDISK = config("USE_RAMDISK", default=False, cast=bool)
+USE_RESOURCE_MONITORING = config("USE_RESOURCE_MONITORING", default=1, cast=bool)
 RAMDISK_PATH = config("RAMDISK_PATH", default="/mnt/ramdisk", cast=str)
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 
@@ -318,8 +319,12 @@ async def get_embedding_vector_for_string(request: EmbeddingRequest, req: Reques
         lock = await shared_resources.lock_manager.lock(unique_id)
         if lock.valid:
             try:
+                input_data = {"text": request.text}
+                context = start_resource_monitoring("get_embedding_vector_for_string", input_data, req.client.host if req else "localhost")
+                            
                 return await get_or_compute_embedding(request, req, client_ip, document_file_hash)
             finally:
+                end_resource_monitoring(context)
                 await shared_resources.lock_manager.unlock(lock)
         else:
             return {"status": "already processing"}
@@ -327,6 +332,7 @@ async def get_embedding_vector_for_string(request: EmbeddingRequest, req: Reques
         logger.error(f"An error occurred while processing the request: {e}")
         logger.error(traceback.format_exc()) # Print the traceback
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
 
 
 @app.post("/get_token_level_embeddings_matrix_and_combined_feature_vector_for_string/",
@@ -803,10 +809,8 @@ async def get_all_embedding_vectors_for_document(
 ):
     client_ip = req.client.host if req else "localhost"
     request_time = datetime.utcnow()
-    
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
         raise HTTPException(status_code=403, detail="Unauthorized")
-    
     if file:
         _, extension = os.path.splitext(file.filename)
         temp_file_path = tempfile.NamedTemporaryFile(suffix=extension, delete=False).name
@@ -820,20 +824,16 @@ async def get_all_embedding_vectors_for_document(
         temp_file_path = await download_file(url, size, hash)
     else:
         raise HTTPException(status_code=400, detail="Invalid input. Provide either a file or URL with hash and size.")
-    
     hash_obj = hashlib.sha3_256()
     with open(temp_file_path, 'rb') as buffer:
         for chunk in iter(lambda: buffer.read(chunk_size), b''):
             hash_obj.update(chunk)
     file_hash = hash_obj.hexdigest()
     logger.info(f"SHA3-256 hash of submitted file: {file_hash}")
-
     if corpus_identifier_string is None:
         corpus_identifier_string = file_hash
-
     unique_id = f"document_embedding_{file_hash}_{llm_model_name}"
     lock = await shared_resources.lock_manager.lock(unique_id)
-    
     if lock.valid:
         try:
             async with AsyncSession() as session:
@@ -846,8 +846,17 @@ async def get_all_embedding_vectors_for_document(
                     mime = Magic(mime=True)
                     mime_type = mime.from_file(temp_file_path)
                     logger.info(f"Received request to extract embeddings for document {file.filename if file else url} with MIME type: {mime_type} and size: {os.path.getsize(temp_file_path)} bytes from IP address: {client_ip}")
-                    strings = await parse_submitted_document_file_into_sentence_strings_func(temp_file_path, mime_type)
-                    results = await compute_embeddings_for_document(strings, llm_model_name, client_ip, file_hash)
+                    sentences = await parse_submitted_document_file_into_sentence_strings_func(temp_file_path, mime_type)
+                    input_data = {
+                        "sentences": sentences,
+                        "file_size_mb": os.path.getsize(temp_file_path) / (1024 * 1024),
+                        "mime_type": mime_type
+                    }
+                    context = start_resource_monitoring("get_all_embedding_vectors_for_document", input_data, client_ip)
+                    try:
+                        results = await compute_embeddings_for_document(sentences, llm_model_name, client_ip, file_hash)
+                    finally:
+                        end_resource_monitoring(context)                    
                     df = pd.DataFrame(results, columns=['text', 'embedding'])
                     json_content = df.to_json(orient=json_format or 'records').encode()
                     with open(temp_file_path, 'rb') as file_buffer:
@@ -949,20 +958,24 @@ async def get_text_completions_from_input_prompt(request: TextCompletionRequest,
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
         logger.warning(f"Unauthorized request from client IP {client_ip}")
         raise HTTPException(status_code=403, detail="Unauthorized")
+    context = start_resource_monitoring("get_text_completions_from_input_prompt", request.dict(), client_ip)
     try:
         unique_id = f"text_completion_{hash(request.input_prompt)}_{request.llm_model_name}"
-        lock = await shared_resources.lock_manager.lock(unique_id)        
+        lock = await shared_resources.lock_manager.lock(unique_id)
         if lock.valid:
-            try:    
-                return await generate_completion_from_llm(request, req, client_ip)
+            try:
+                response = await generate_completion_from_llm(request, req, client_ip)
+                return response
             finally:
                 await shared_resources.lock_manager.unlock(lock)
         else:
             return {"status": "already processing"}
     except Exception as e:
         logger.error(f"An error occurred while processing the request: {e}")
-        logger.error(traceback.format_exc()) # Print the traceback
+        logger.error(traceback.format_exc())  # Print the traceback
         raise HTTPException(status_code=500, detail="Internal Server Error")
+    finally:
+        end_resource_monitoring(context)
 
 
 
@@ -1124,16 +1137,23 @@ async def compute_transcript_with_whisper_from_audio(
         temp_file_path = await download_file(url, size, hash)
     else:
         raise HTTPException(status_code=400, detail="Invalid input. Provide either a file or URL with hash and size.")
+    audio_file_size_mb = os.path.getsize(temp_file_path) / (1024 * 1024)
+    input_data = {
+        "file_size_mb": audio_file_size_mb,
+        "audio_duration_seconds": get_audio_duration_seconds(temp_file_path)
+    }
+    context = start_resource_monitoring("compute_transcript_with_whisper_from_audio", input_data, req.client.host if req else "localhost")
     try:
         audio_transcript = await get_or_compute_transcript(temp_file_path, compute_embeddings_for_resulting_transcript_document, llm_model_name, req, corpus_identifier_string)
-        os.remove(temp_file_path)
         return JSONResponse(content=audio_transcript)
     except Exception as e:
         os.remove(temp_file_path)
         logger.error(f"An error occurred while processing the request: {e}")
         logger.error(traceback.format_exc())  # Print the traceback
         raise HTTPException(status_code=500, detail="Internal Server Error")
-
+    finally:
+        os.remove(temp_file_path)
+        end_resource_monitoring(context)
 
 
 @app.post("/add_new_grammar_definition_file/",
