@@ -19,6 +19,7 @@ import json
 import os 
 import signal
 import re
+import hashlib
 import tempfile
 import traceback
 import zipfile
