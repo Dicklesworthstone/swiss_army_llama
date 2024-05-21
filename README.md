@@ -63,7 +63,7 @@ Watch the the automated setup process in action [here](https://asciinema.org/a/6
 
 ## Features
 
-1. **Text Embedding Computation**: Utilizes pre-trained LLama2 and other LLMs via llama_cpp and langchain to generate embeddings for any provided text, including token-level embeddings that capture more nuanced information about the content.
+1. **Text Embedding Computation**: Utilizes pre-trained LLama2 and other LLMs via llama_cpp to generate embeddings for any provided text, including token-level embeddings that capture more nuanced information about the content.
 2. **Embedding Caching**: Efficiently stores and retrieves computed embeddings in SQLite, minimizing redundant computations. It supports caching both fixed-sized embedding vectors and token-level embeddings.
 3. **Advanced Similarity Measurements and Retrieval**: Utilizes the author's own `fast_vector_similarity` library written in Rust to offer highly optimized advanced similarity measures such as `spearman_rho`, `kendall_tau`, `approximate_distance_correlation`, `jensen_shannon_similarity`, and `hoeffding_d`. Semantic search across cached embeddings is also supported using FAISS vector searching.
 4. **Two-Step Advanced Semantic Search**: The API first leverages FAISS and cosine similarity for rapid filtering, and then applies additional similarity measures like `spearman_rho`, `kendall_tau`, `approximate_distance_correlation`, `jensen_shannon_similarity`, and `hoeffding_d` for a more nuanced comparison.
@@ -108,9 +108,9 @@ fastapi
 faster-whisper
 filelock
 httpx
-langchain
-langchain-community
 llama-cpp-python
+magika
+mutagen
 nvgpu
 pandas
 psutil
@@ -120,6 +120,8 @@ pytest
 python-decouple
 python-multipart
 pytz
+redis
+ruff
 sqlalchemy
 textract-py3
 uvicorn

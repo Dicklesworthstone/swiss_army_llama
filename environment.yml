@@ -13,8 +13,6 @@ dependencies:
   - faster-whisper
   - filelock
   - httpx
-  - langchain
-  - langchain-community
   - llama-cpp-python
   - magika
   - mutagen
@@ -27,6 +25,8 @@ dependencies:
   - python-decouple
   - python-multipart
   - pytz
+  - redis
+  - ruff
   - sqlalchemy
   - textract-py3
   - uvicorn

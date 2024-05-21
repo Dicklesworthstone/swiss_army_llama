@@ -6,10 +6,12 @@ import re
 import json
 import io
 import redis
-import subprocess
 import sys
+import threading
 import numpy as np
+import pandas as pd
 import faiss
+from io import StringIO
 from typing import Any
 from collections import defaultdict
 from sqlalchemy import text as sql_text
@@ -63,23 +65,68 @@ def is_redis_running(host='localhost', port=6379):
         
 def start_redis_server():
     try:
-        # Attempt to start Redis server using the redis-server command
-        subprocess.run(["redis-server"], check=True)
-        print("Redis server started successfully.")
-    except subprocess.CalledProcessError as e:
+        result = os.system("sudo service redis-server start")
+        if result == 0:
+            print("Redis server started successfully.")
+        else:
+            logger.error(f"Failed to start Redis server, return code: {result}")
+            raise Exception("Failed to start Redis server.")
+    except Exception as e:
         logger.error(f"Failed to start Redis server: {e}")
         raise
 
 def restart_redis_server():
     try:
-        # Attempt to restart Redis server using the redis-cli shutdown command
-        subprocess.run(["redis-cli", "shutdown"], check=True)
-        subprocess.run(["redis-server"], check=True)
-        print("Redis server restarted successfully.")
-    except subprocess.CalledProcessError as e:
+        result = os.system("sudo service redis-server stop")
+        if result != 0:
+            logger.warning(f"Failed to stop Redis server, it might not be running. Return code: {result}")
+        result = os.system("sudo service redis-server start")
+        if result == 0:
+            print("Redis server started successfully.")
+        else:
+            logger.error(f"Failed to start Redis server, return code: {result}")
+            raise Exception("Failed to start Redis server.")
+    except Exception as e:
         logger.error(f"Failed to restart Redis server: {e}")
         raise
 
+def configure_redis_optimally(redis_host='localhost', redis_port=6379, maxmemory='1gb'):
+    configured_file = 'redis_configured.txt'
+    if os.path.exists(configured_file):
+        print("Redis has already been configured. Skipping configuration.")
+        return
+    if not is_redis_running(redis_host, redis_port):
+        start_redis_server()
+    r = redis.StrictRedis(host=redis_host, port=redis_port, decode_responses=True)
+    output = []
+    def set_config(key, value):
+        try:
+            response = r.config_set(key, value)
+            msg = f"Successfully set {key} to {value}" if response else f"Failed to set {key} to {value}"
+            output.append(msg)
+            print(msg)
+        except redis.exceptions.ConnectionError as e:
+            logger.error(f"Failed to set config {key}: {e}")
+            raise
+    set_config('maxmemory', maxmemory)
+    set_config('maxmemory-policy', 'allkeys-lru')
+    max_clients = os.cpu_count() * 1000
+    set_config('maxclients', max_clients)
+    set_config('timeout', 300)
+    set_config('save', '900 1 300 10 60 10000')
+    set_config('appendonly', 'yes')
+    set_config('appendfsync', 'everysec')
+    set_config('stop-writes-on-bgsave-error', 'no')
+    output.append("Redis configuration optimized successfully.")
+    output.append("Restarting Redis server to apply changes...")
+    with open(configured_file, 'w') as f:
+        f.write("\n".join(output))
+    print("\n".join(output))
+    restart_redis_server()
+    
+def configure_redis_in_background():
+    threading.Thread(target=configure_redis_optimally).start()
+        
 async def build_faiss_indexes():
     global faiss_indexes, token_faiss_indexes, associated_texts_by_model
     if os.environ.get("FAISS_SETUP_DONE") == "1":
@@ -264,30 +311,3 @@ class FakeUploadFile:
         return self.file.seek(offset, whence)
     def tell(self) -> int:
         return self.file.tell()
-    
-def configure_redis_optimally(redis_host='localhost', redis_port=6379, maxmemory='1gb'):
-    if not is_redis_running(redis_host, redis_port):
-        start_redis_server()
-    r = redis.StrictRedis(host=redis_host, port=redis_port, decode_responses=True)
-    def set_config(key, value):
-        response = r.config_set(key, value)
-        if response:
-            print(f"Successfully set {key} to {value}")
-        else:
-            print(f"Failed to set {key} to {value}")
-    set_config('maxmemory', maxmemory)
-    set_config('maxmemory-policy', 'allkeys-lru')
-    set_config('databases', 16)
-    max_clients = os.cpu_count() * 1000
-    set_config('maxclients', max_clients)
-    set_config('timeout', 300)
-    set_config('save', '900 1 300 10 60 10000')
-    set_config('appendonly', 'yes')
-    set_config('appendfsync', 'everysec')
-    set_config('stop-writes-on-bgsave-error', 'no')
-    print("Redis configuration optimized successfully.")
-    print("Restarting Redis server to apply changes...")
-    restart_redis_server()
-
-def configure_redis_in_background():
-    threading.Thread(target=configure_redis_optimally).start()

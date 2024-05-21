@@ -1,19 +1,18 @@
-from misc_utility_functions import  is_redis_running, build_faiss_indexes, suppress_stdout_stderr
+from misc_utility_functions import  is_redis_running, start_redis_server, build_faiss_indexes, suppress_stdout_stderr
 from database_functions import DatabaseWriter, initialize_db
 from ramdisk_functions import setup_ramdisk, copy_models_to_ramdisk, check_that_user_has_required_permissions_to_manage_ramdisks
 from logger_config import setup_logger
 from aioredlock import Aioredlock
 import aioredis
 import asyncio
-import subprocess
 import urllib.request
 import os
 import nvgpu
 import glob
 import json
 import traceback
+import llama_cpp
 from typing import List, Tuple, Dict
-from langchain_community.embeddings import LlamaCppEmbeddings
 from decouple import config
 from fastapi import HTTPException
 logger = setup_logger()
@@ -70,7 +69,7 @@ async def initialize_globals():
     global db_writer, faiss_indexes, token_faiss_indexes, associated_texts_by_model, redis, lock_manager
     if not is_redis_running():
         logger.info("Starting Redis server...")
-        subprocess.Popen(['redis-server'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        start_redis_server()
         await asyncio.sleep(1)  # Sleep for 1 second to give Redis time to start
     redis = await aioredis.create_redis_pool('redis://localhost')
     lock_manager = Aioredlock([redis])
@@ -173,8 +172,7 @@ def load_model(llm_model_name: str, raise_http_exception: bool = True):
         matching_files.sort(key=os.path.getmtime, reverse=True)
         model_file_path = matching_files[0]
         with suppress_stdout_stderr():
-            model_instance = LlamaCppEmbeddings(model_path=model_file_path, use_mlock=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS) # Load the model without GPU acceleration
-        model_instance.client.verbose = USE_VERBOSE
+            model_instance = llama_cpp.Llama(model_path=model_file_path, use_mlock=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, embedding=True, verbose=False) 
         embedding_model_cache[llm_model_name] = model_instance
         return model_instance
     except TypeError as e:

@@ -26,14 +26,14 @@ class TextEmbedding(Base):
     response_time = Column(DateTime)
     total_time = Column(Float)
     document_file_hash = Column(String, ForeignKey('document_embeddings.file_hash'))
-    document = relationship("DocumentEmbedding", back_populates="embeddings")
+    corpus_identifier_string = Column(String, index=True)
+    document = relationship("DocumentEmbedding", back_populates="embeddings", foreign_keys=[document_file_hash, corpus_identifier_string])
     __table_args__ = (UniqueConstraint('text_hash', 'llm_model_name', name='_text_hash_model_uc'),)
     @validates('text')
     def update_text_hash(self, key, text):
         self.text_hash = sha3_256(text.encode('utf-8')).hexdigest()
         return text
-        
-        
+
 class DocumentEmbedding(Base):
     __tablename__ = "document_embeddings"
     id = Column(Integer, primary_key=True, index=True)
@@ -41,25 +41,26 @@ class DocumentEmbedding(Base):
     filename = Column(String)
     mimetype = Column(String)
     file_hash = Column(String, index=True)
-    llm_model_name = Column(String, index=True)    
-    file_data = Column(LargeBinary) # To store the original file
-    document_embedding_results_json = Column(JSON) # To store the embedding results JSON
+    corpus_identifier_string = Column(String, index=True)
+    llm_model_name = Column(String, index=True)
+    file_data = Column(LargeBinary)  # To store the original file
+    document_embedding_results_json = Column(JSON)  # To store the embedding results JSON
     ip_address = Column(String)
     request_time = Column(DateTime)
     response_time = Column(DateTime)
-    total_time = Column(Float)    
-    document = relationship("Document", back_populates="document_embeddings")
-    embeddings = relationship("TextEmbedding", back_populates="document")
+    total_time = Column(Float)
+    document = relationship("Document", back_populates="document_embeddings", foreign_keys=[document_hash])
+    embeddings = relationship("TextEmbedding", back_populates="document", foreign_keys=[TextEmbedding.document_file_hash])
     __table_args__ = (UniqueConstraint('file_hash', 'llm_model_name', name='_file_hash_model_uc'),)
-    
 
 class Document(Base):
     __tablename__ = "documents"
     id = Column(Integer, primary_key=True, index=True)
     llm_model_name = Column(String, index=True)
     document_hash = Column(String, index=True)
-    document_embeddings = relationship("DocumentEmbedding", back_populates="document")
-    def update_hash(self): # Concatenate specific attributes from the document_embeddings relationship
+    document_embeddings = relationship("DocumentEmbedding", back_populates="document", foreign_keys=[DocumentEmbedding.document_hash])
+    corpus_identifier_string = Column(String, index=True)
+    def update_hash(self):  # Concatenate specific attributes from the document_embeddings relationship
         hash_data = "".join([emb.filename + emb.mimetype for emb in self.document_embeddings])
         self.document_hash = sha3_256(hash_data.encode('utf-8')).hexdigest()
 
@@ -70,7 +71,6 @@ def update_document_hash_on_append(target, value, initiator):
 @event.listens_for(Document.document_embeddings, 'remove')
 def update_document_hash_on_remove(target, value, initiator):
     target.update_hash()
-
 class TokenLevelEmbedding(Base):
     __tablename__ = "token_level_embeddings"
     id = Column(Integer, primary_key=True, index=True)
@@ -148,6 +148,7 @@ class SemanticSearchRequest(BaseModel):
     query_text: str
     number_of_most_similar_strings_to_return: Optional[int] = 10
     llm_model_name: Optional[str] = DEFAULT_MODEL_NAME
+    corpus_identifier_string: str
         
 class SemanticSearchResponse(BaseModel):
     query_text: str
@@ -156,6 +157,7 @@ class SemanticSearchResponse(BaseModel):
 class AdvancedSemanticSearchRequest(BaseModel):
     query_text: str
     llm_model_name: str = DEFAULT_MODEL_NAME
+    corpus_identifier_string: str
     similarity_filter_percentage: float = 0.98
     number_of_most_similar_strings_to_return: Optional[int] = None
 

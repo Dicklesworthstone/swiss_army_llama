@@ -3,12 +3,12 @@ from shared_resources import initialize_globals, download_models, is_gpu_availab
 from logger_config import setup_logger
 from database_functions import AsyncSessionLocal, DatabaseWriter, get_db_writer
 from ramdisk_functions import clear_ramdisk
-from misc_utility_functions import  build_faiss_indexes, safe_path, configure_redis_in_background
+from misc_utility_functions import  build_faiss_indexes, safe_path, configure_redis_optimally
 from embeddings_data_models import DocumentEmbedding, TokenLevelEmbeddingBundle
 from embeddings_data_models import EmbeddingRequest, SemanticSearchRequest, AdvancedSemanticSearchRequest, SimilarityRequest, TextCompletionRequest, AddGrammarRequest
 from embeddings_data_models import EmbeddingResponse, SemanticSearchResponse, AdvancedSemanticSearchResponse, SimilarityResponse, AllStringsResponse, AllDocumentsResponse, TextCompletionResponse, AddGrammarResponse
 from embeddings_data_models import ShowLogsIncrementalModel
-from service_functions import get_or_compute_embedding, get_or_compute_transcript, add_model_url, get_or_compute_token_level_embedding_bundle_combined_feature_vector, calculate_token_level_embeddings, download_file, start_resource_monitoring, end_resource_monitoring
+from service_functions import get_or_compute_embedding, get_or_compute_transcript, add_model_url, get_or_compute_token_level_embedding_bundle_combined_feature_vector, calculate_token_level_embeddings, download_file, start_resource_monitoring, end_resource_monitoring, get_texts_for_corpus_identifier, get_texts_for_model
 from service_functions import parse_submitted_document_file_into_sentence_strings_func, compute_embeddings_for_document, store_document_embeddings_in_db, generate_completion_from_llm, validate_bnf_grammar_func, convert_document_to_sentences_func, get_audio_duration_seconds
 from grammar_builder import GrammarBuilder
 from log_viewer_functions import show_logs_incremental_func, show_logs_func
@@ -17,7 +17,7 @@ import asyncio
 import glob
 import json
 import os 
-import signal
+import sys
 import random
 import re
 import tempfile
@@ -32,7 +32,6 @@ import numpy as np
 from decouple import config
 import uvicorn
 import fastapi
-from fastapi.param_functions import Body
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Depends, Form
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, Response
 from contextlib import asynccontextmanager
@@ -50,6 +49,7 @@ asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 logger = setup_logger()
 magika = Magika()
 gpu_check_results = is_gpu_available()
+configure_redis_optimally()
 logger.info(f"\nGPU check results:\n {gpu_check_results}\n")
 
 class GracefulExit(BaseException):
@@ -65,7 +65,6 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown code (if any)
     pass
-
 
 # Note: the Ramdisk setup and teardown requires sudo; to enable password-less sudo, edit your sudoers file with `sudo visudo`.
 # Add the following lines, replacing username with your actual username
@@ -103,9 +102,6 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
     logger.exception(exc)
     return JSONResponse(status_code=500, content={"message": "An unexpected error occurred"})
 
-@app.on_event("startup")
-async def startup_event():
-    configure_redis_in_background()
 
 @app.get("/", include_in_schema=False)
 async def custom_swagger_ui_html():
@@ -325,7 +321,6 @@ async def get_embedding_vector_for_string(request: EmbeddingRequest, req: Reques
             try:
                 input_data = {"text": request.text}
                 context = start_resource_monitoring("get_embedding_vector_for_string", input_data, req.client.host if req else "localhost")
-                            
                 return await get_or_compute_embedding(request, req, client_ip, document_file_hash)
             finally:
                 end_resource_monitoring(context)
@@ -421,7 +416,7 @@ async def get_token_level_embeddings_matrix_and_combined_feature_vector_for_stri
         existing_embedding_bundle = result.unique().scalar()
         if existing_embedding_bundle:
             logger.info("Found existing token-level embedding bundle in the database.")
-            combined_feature_vector = await get_or_compute_token_level_embedding_bundle_combined_feature_vector(existing_embedding_bundle.id, existing_embedding_bundle.token_level_embeddings, db_writer)
+            combined_feature_vector = await get_or_compute_token_level_embedding_bundle_combined_feature_vector(existing_embedding_bundle.id, existing_embedding_bundle.token_level_embeddings)
             response_content = {
                 'input_text': request.text,
                 'token_level_embedding_bundle': json.loads(existing_embedding_bundle.token_level_embeddings_bundle_json),
@@ -465,7 +460,7 @@ async def get_token_level_embeddings_matrix_and_combined_feature_vector_for_stri
                 overall_total_time = (datetime.utcnow() - request_time).total_seconds()
                 if len(embedding_bundle.token_level_embeddings_bundle_json) > 0:
                     tokens = re.findall(r'\b\w+\b', request.text)
-                    logger.info(f"The response took {overall_total_time} seconds to generate, or {overall_total_time / (float(len(tokens))/1000.0)} seconds per thousand input tokens and {overall_total_time / (float(json_content_length)/1000000.0)} seconds per million output characters.")
+                    logger.info(f"The response took {overall_total_time:,.2f} seconds to generate, or {overall_total_time / (float(len(tokens))/1000.0):,.2f} seconds per thousand input tokens and {overall_total_time / (float(json_content_length)/1000000.0):,.2f} seconds per million output characters.")
                 if send_back_json_or_zip_file == 'json': # Assume 'json' response should be sent back
                     logger.info(f"Now sending back JSON response for input text string {request.text} and model {request.llm_model_name}; First 100 characters of JSON response out of {len(json_content)} total characters: {json_content[:100]}")
                     return JSONResponse(content=response_content)
@@ -864,7 +859,7 @@ async def get_all_embedding_vectors_for_document(
                 result = await session.execute(select(DocumentEmbedding).filter(DocumentEmbedding.file_hash == file_hash, DocumentEmbedding.llm_model_name == llm_model_name))
                 existing_document_embedding = result.scalar_one_or_none()
                 if existing_document_embedding:
-                    logger.info(f"Document has been processed before, returning existing result")
+                    logger.info("Document has been processed before, returning existing result")
                     json_content = json.dumps(existing_document_embedding.document_embedding_results_json).encode()
                 else:
                     with open(temp_file_path, 'rb') as f:
@@ -880,7 +875,7 @@ async def get_all_embedding_vectors_for_document(
                     }
                     context = start_resource_monitoring("get_all_embedding_vectors_for_document", input_data, client_ip)
                     try:
-                        results = await compute_embeddings_for_document(sentences, llm_model_name, client_ip, file_hash)
+                        results = await compute_embeddings_for_document(sentences, llm_model_name, client_ip, file_hash, corpus_identifier_string)
                     except Exception as e:
                         logger.error(f"Error while computing embeddings for document: {e}")
                         traceback.print_exc()
@@ -891,7 +886,7 @@ async def get_all_embedding_vectors_for_document(
                     json_content = df.to_json(orient=json_format or 'records').encode()
                     with open(temp_file_path, 'rb') as file_buffer:
                         original_file_content = file_buffer.read()
-                    await store_document_embeddings_in_db(file.filename if file else url, file_hash, original_file_content, json_content, results, llm_model_name, client_ip, request_time, corpus_identifier_string)
+                    await store_document_embeddings_in_db(file, file_hash, original_file_content, json_content, results, llm_model_name, client_ip, request_time, corpus_identifier_string)
             overall_total_time = (datetime.utcnow() - request_time).total_seconds()
             logger.info(f"Done getting all embeddings for document containing {len(sentences)} sentences with model {llm_model_name}")
             json_content_length = len(json_content)
