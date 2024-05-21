@@ -503,6 +503,7 @@ async def parse_submitted_document_file_into_sentence_strings_func(temp_file_pat
     else:
         try:
             if mime_type == 'application/pdf':
+                # Process PDF with pdfminer first
                 content = textract.process(temp_file_path, method='pdfminer')
             else:
                 content = textract.process(temp_file_path)
