@@ -248,6 +248,11 @@ class FakeUploadFile:
         return self.file.tell()
     
 def configure_redis_optimally(redis_host='localhost', redis_port=6379, maxmemory='1gb'):
+    try:
+        subprocess.run(["sudo systemctl start redis-server"], check=True)
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to start Redis server: {e}")
+        raise
     r = redis.StrictRedis(host=redis_host, port=redis_port, decode_responses=True)
     def set_config(key, value):
         response = r.config_set(key, value)

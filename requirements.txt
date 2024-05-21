@@ -21,6 +21,7 @@ pytest
 python-decouple
 python-multipart
 pytz
+redis
 sqlalchemy
 textract-py3
 uvicorn
