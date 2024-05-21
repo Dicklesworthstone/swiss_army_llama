@@ -1369,6 +1369,7 @@ async def convert_document_to_sentences(
         _, extension = os.path.splitext(file.filename)
         temp_file = tempfile.NamedTemporaryFile(suffix=extension, delete=False)
         temp_file_path = temp_file.name
+        logger.info(f"Temp file path: {temp_file_path}")
         with open(temp_file_path, 'wb') as buffer:
             chunk_size = 1024
             chunk = await file.read(chunk_size)
