@@ -493,18 +493,17 @@ async def compute_embeddings_for_document(strings: list, llm_model_name: str, cl
 
 async def parse_submitted_document_file_into_sentence_strings_func(temp_file_path: str, mime_type: str):
     strings = []
+    content = ""
     if mime_type.startswith('text/'):
-        with open(temp_file_path, 'r') as buffer:
-            content = buffer.read()
+        try:
+            with open(temp_file_path, 'r', encoding='utf-8') as buffer:
+                content = buffer.read()
+        except UnicodeDecodeError:
+            with open(temp_file_path, 'r', encoding='latin1') as buffer:
+                content = buffer.read()
     else:
         try:
             content = textract.process(temp_file_path).decode('utf-8')
-        except UnicodeDecodeError:
-            try:
-                content = textract.process(temp_file_path).decode('unicode_escape')
-            except Exception as e:
-                logger.error(f"Error while processing file: {e}, mime_type: {mime_type}")
-                raise HTTPException(status_code=400, detail=f"Unsupported file type or error: {e}")
         except Exception as e:
             logger.error(f"Error while processing file: {e}, mime_type: {mime_type}")
             raise HTTPException(status_code=400, detail=f"Unsupported file type or error: {e}")
