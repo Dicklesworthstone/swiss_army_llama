@@ -508,7 +508,7 @@ async def read_and_rewrite_file_with_safe_encoding(temp_file_path: str):
         traceback.print_exc()
         raise HTTPException(status_code=400, detail=f"Error while reading and decoding file: {e}")
     try:
-        with open(temp_file_path, 'w', encoding='utf-8') as buffer:
+        with open(temp_file_path, 'wb') as buffer:
             buffer.write(content)
     except Exception as e:
         logger.error(f"Error while writing file with utf-8 encoding: {e}")
