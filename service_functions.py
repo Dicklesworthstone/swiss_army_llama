@@ -502,7 +502,7 @@ async def parse_submitted_document_file_into_sentence_strings_func(temp_file_pat
                 content = buffer.read()
     else:
         try:
-            content = textract.process(temp_file_path, encoding='utf-8', method='pdfminer')
+            content = textract.process(temp_file_path, encoding='unicode_escape', method='pdfminer')
         except Exception as e:
             logger.error(f"Error while processing file: {e}, mime_type: {mime_type}")
             traceback.print_exc()
@@ -511,7 +511,7 @@ async def parse_submitted_document_file_into_sentence_strings_func(temp_file_pat
     if len(sentences) == 0 and temp_file_path.lower().endswith('.pdf'):
         logger.info("No sentences found, attempting OCR using Tesseract.")
         try:
-            content = textract.process(temp_file_path, method='tesseract', encoding='utf-8')
+            content = textract.process(temp_file_path, encoding='unicode_escape', method='tesseract')
             sentences = sophisticated_sentence_splitter(content)
         except Exception as e:
             logger.error(f"Error while processing file with OCR: {e}")
