@@ -8,7 +8,7 @@ from embeddings_data_models import DocumentEmbedding, TokenLevelEmbeddingBundle
 from embeddings_data_models import EmbeddingRequest, SemanticSearchRequest, AdvancedSemanticSearchRequest, SimilarityRequest, TextCompletionRequest, AddGrammarRequest
 from embeddings_data_models import EmbeddingResponse, SemanticSearchResponse, AdvancedSemanticSearchResponse, SimilarityResponse, AllStringsResponse, AllDocumentsResponse, TextCompletionResponse, AddGrammarResponse
 from embeddings_data_models import ShowLogsIncrementalModel
-from service_functions import get_or_compute_embedding, get_or_compute_transcript, add_model_url, get_or_compute_token_level_embedding_bundle_combined_feature_vector, calculate_token_level_embeddings, download_file, start_resource_monitoring, end_resource_monitoring
+from service_functions import get_or_compute_embedding, get_or_compute_transcript, add_model_url, get_or_compute_token_level_embedding_bundle_combined_feature_vector, calculate_token_level_embeddings, download_file, start_resource_monitoring, end_resource_monitoring, read_and_rewrite_file_with_safe_encoding
 from service_functions import parse_submitted_document_file_into_sentence_strings_func, compute_embeddings_for_document, store_document_embeddings_in_db, generate_completion_from_llm, validate_bnf_grammar_func, convert_document_to_sentences_func, get_audio_duration_seconds
 from grammar_builder import GrammarBuilder
 from log_viewer_functions import show_logs_incremental_func, show_logs_func
@@ -825,6 +825,7 @@ async def get_all_embedding_vectors_for_document(
         temp_file_path = await download_file(url, size, hash)
     else:
         raise HTTPException(status_code=400, detail="Invalid input. Provide either a file or URL with hash and size.")
+    # Verify file integrity
     hash_obj = sha3_256()
     with open(temp_file_path, 'rb') as buffer:
         for chunk in iter(lambda: buffer.read(chunk_size), b''):
@@ -844,6 +845,7 @@ async def get_all_embedding_vectors_for_document(
                     logger.info(f"Document {file.filename if file else url} has been processed before, returning existing result")
                     json_content = json.dumps(existing_document_embedding.document_embedding_results_json).encode()
                 else:
+                    await read_and_rewrite_file_with_safe_encoding(temp_file_path)
                     with open(temp_file_path, 'rb') as file:
                         input_data_binary = file.read()
                     result = magika.identify_bytes(input_data_binary)
@@ -888,7 +890,7 @@ async def get_all_embedding_vectors_for_document(
     else:
         return {"status": "already processing"}
     
-
+    
 
 @app.post("/get_text_completions_from_input_prompt/",
         response_model=List[TextCompletionResponse],
