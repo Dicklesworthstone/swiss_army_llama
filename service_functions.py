@@ -506,6 +506,7 @@ async def parse_submitted_document_file_into_sentence_strings_func(temp_file_pat
             content = textract.process(temp_file_path).decode('utf-8')
         except Exception as e:
             logger.error(f"Error while processing file: {e}, mime_type: {mime_type}")
+            traceback.print_exc()
             raise HTTPException(status_code=400, detail=f"Unsupported file type or error: {e}")
     sentences = sophisticated_sentence_splitter(content)
     if len(sentences) == 0 and temp_file_path.lower().endswith('.pdf'):
@@ -515,6 +516,7 @@ async def parse_submitted_document_file_into_sentence_strings_func(temp_file_pat
             sentences = sophisticated_sentence_splitter(content)
         except Exception as e:
             logger.error(f"Error while processing file with OCR: {e}")
+            traceback.print_exc()
             raise HTTPException(status_code=400, detail=f"OCR failed: {e}")
     if len(sentences) == 0:
         logger.info("No sentences found in the document")
@@ -683,21 +685,50 @@ def validate_bnf_grammar_func(grammar):
             return False, f"Used rule {rule} is not defined."
     return True, "Valid BNF Grammar"
 
-async def convert_document_to_sentences_func(file_path: str, mime_type: str) -> Dict[str, Any]:
-    sentences = await parse_submitted_document_file_into_sentence_strings_func(file_path, mime_type)
-    total_number_of_sentences = len(sentences)
-    total_input_file_size_in_bytes = os.path.getsize(file_path)
-    total_text_size_in_characters = sum(len(sentence) for sentence in sentences)
-    total_words = sum(len(sentence.split()) for sentence in sentences)
-    average_words_per_sentence = total_words / total_number_of_sentences if total_number_of_sentences else 0
-    result = {
-        "individual_sentences": sentences,
-        "total_number_of_sentences": total_number_of_sentences,
-        "average_words_per_sentence": average_words_per_sentence,
-        "total_input_file_size_in_bytes": total_input_file_size_in_bytes,
-        "total_text_size_in_characters": total_text_size_in_characters
-    }
-    return result
+async def parse_submitted_document_file_into_sentence_strings_func(temp_file_path: str, mime_type: str):
+    content = ""
+    if mime_type.startswith('text/'):
+        try:
+            with open(temp_file_path, 'r', encoding='utf-8') as buffer:
+                content = buffer.read()
+        except UnicodeDecodeError:
+            with open(temp_file_path, 'r', encoding='latin1') as buffer:
+                content = buffer.read()
+    else:
+        try:
+            content = textract.process(temp_file_path)
+        except Exception as e:
+            logger.error(f"Error while processing file: {e}, mime_type: {mime_type}")
+            traceback.print_exc()
+            raise HTTPException(status_code=400, detail=f"Unsupported file type or error: {e}")
+        if isinstance(content, bytes):
+            try:
+                content = content.decode('utf-8')
+            except UnicodeDecodeError:
+                try:
+                    content = content.decode('latin1')
+                except Exception as e:
+                    logger.error(f"Error while decoding file: {e}, mime_type: {mime_type}")
+                    traceback.print_exc()
+                    raise HTTPException(status_code=400, detail=f"Unsupported file type or error: {e}")
+    sentences = sophisticated_sentence_splitter(content)
+    if len(sentences) == 0 and temp_file_path.lower().endswith('.pdf'):
+        logger.info("No sentences found, attempting OCR using Tesseract.")
+        try:
+            content = textract.process(temp_file_path, method='tesseract')
+            if isinstance(content, bytes):
+                content = content.decode('utf-8')
+            sentences = sophisticated_sentence_splitter(content)
+        except Exception as e:
+            logger.error(f"Error while processing file with OCR: {e}")
+            traceback.print_exc()
+            raise HTTPException(status_code=400, detail="OCR failed: {e}")
+    if len(sentences) == 0:
+        logger.info("No sentences found in the document")
+        raise HTTPException(status_code=400, detail="No sentences found in the document")
+    logger.info(f"Extracted {len(sentences)} sentences from the document")
+    strings = [s.strip() for s in sentences if len(s.strip()) > MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING]
+    return strings
 
 async def download_file(url: str, expected_size: int, expected_hash: str) -> str:
     temp_file = tempfile.NamedTemporaryFile(delete=False)
