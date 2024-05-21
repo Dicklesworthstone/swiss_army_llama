@@ -502,21 +502,24 @@ async def parse_submitted_document_file_into_sentence_strings_func(temp_file_pat
                 content = buffer.read()
     else:
         try:
-            content = textract.process(temp_file_path)
+            if mime_type == 'application/pdf':
+                content = textract.process(temp_file_path, method='pdfminer')
+            else:
+                content = textract.process(temp_file_path)
         except Exception as e:
             logger.error(f"Error while processing file: {e}, mime_type: {mime_type}")
             traceback.print_exc()
             raise HTTPException(status_code=400, detail=f"Unsupported file type or error: {e}")
-        if isinstance(content, bytes):
+    if isinstance(content, bytes):
+        try:
+            content = content.decode('utf-8')
+        except UnicodeDecodeError:
             try:
-                content = content.decode('utf-8')
-            except UnicodeDecodeError:
-                try:
-                    content = content.decode('latin1')
-                except Exception as e:
-                    logger.error(f"Error while decoding file: {e}, mime_type: {mime_type}")
-                    traceback.print_exc()
-                    raise HTTPException(status_code=400, detail=f"Unsupported file type or error: {e}")
+                content = content.decode('latin1')
+            except Exception as e:
+                logger.error(f"Error while decoding file: {e}, mime_type: {mime_type}")
+                traceback.print_exc()
+                raise HTTPException(status_code=400, detail=f"Unsupported file type or error: {e}")
     sentences = sophisticated_sentence_splitter(content)
     if len(sentences) == 0 and temp_file_path.lower().endswith('.pdf'):
         logger.info("No sentences found, attempting OCR using Tesseract.")
