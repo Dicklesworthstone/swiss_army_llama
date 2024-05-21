@@ -71,10 +71,13 @@ async def initialize_globals():
     if not is_redis_running():
         logger.info("Starting Redis server...")
         subprocess.Popen(['redis-server'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        await asyncio.sleep(1)  # Sleep for 1 second to give Redis time to start        
+        await asyncio.sleep(1)  # Sleep for 1 second to give Redis time to start
     redis = await aioredis.create_redis_pool('redis://localhost')
     lock_manager = Aioredlock([redis])
-    lock_manager.default_lock_timeout = 20000  # Set lock timeout to 20 seconds
+    lock_manager.default_lock_timeout = 20000  # Lock timeout in milliseconds (20 seconds)
+    lock_manager.retry_count = 5  # Number of retries
+    lock_manager.retry_delay_min = 100  # Minimum delay between retries in milliseconds
+    lock_manager.retry_delay_max = 1000  # Maximum delay between retries in milliseconds
     await initialize_db()
     queue = asyncio.Queue()
     db_writer = DatabaseWriter(queue)
@@ -92,6 +95,7 @@ async def initialize_globals():
         except FileNotFoundError as e:
             logger.error(e)
     faiss_indexes, token_faiss_indexes, associated_texts_by_model = await build_faiss_indexes()
+
 
 # other shared variables and methods
 db_writer = None
