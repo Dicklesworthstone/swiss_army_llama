@@ -847,7 +847,7 @@ async def get_all_embedding_vectors_for_document(
         lock = await shared_resources.lock_manager.lock(unique_id)
         if lock.valid:
             try:
-                async with AsyncSession() as session:
+                async with AsyncSessionLocal() as session:
                     result = await session.execute(select(DocumentEmbedding).filter(DocumentEmbedding.file_hash == file_hash, DocumentEmbedding.llm_model_name == llm_model_name))
                     existing_document_embedding = result.scalar_one_or_none()
                     if existing_document_embedding:
