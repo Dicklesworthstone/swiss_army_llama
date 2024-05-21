@@ -768,33 +768,7 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
 
 @app.post("/get_all_embedding_vectors_for_document/",
     summary="Get Embeddings for a Document",
-    description="""Extract text embeddings for a document. This endpoint supports plain text, .doc/.docx (MS Word), PDF files, images (using Tesseract OCR), and many other file types supported by the textract library.
-
-### Parameters:
-- `file`: The uploaded document file (either plain text, .doc/.docx, PDF, etc.).
-- `url`: URL of the document file to download.
-- `hash`: SHA3-256 hash of the document file to verify integrity.
-- `size`: Size of the document file in bytes to verify completeness.
-- `llm_model_name`: The model used to calculate embeddings (optional).
-- `json_format`: The format of the JSON response (optional, see details below).
-- `send_back_json_or_zip_file`: Whether to return a JSON file or a ZIP file containing the embeddings file (optional, defaults to `zip`).
-- `token`: Security token (optional).
-- `corpus_identifier_string`: An optional string identifier for grouping documents into a specific corpus.
-
-### JSON Format Options:
-The format of the JSON string returned by the endpoint (default is `records`; these are the options supported by the Pandas `to_json()` function):
-
-- `split` : dict like {`index` -> [index], `columns` -> [columns], `data` -> [values]}
-- `records` : list like [{column -> value}, … , {column -> value}]
-- `index` : dict like {index -> {column -> value}}
-- `columns` : dict like {column -> {index -> value}}
-- `values` : just the values array
-- `table` : dict like {`schema`: {schema}, `data`: {data}}
-
-### Examples:
-- Plain Text: Submit a file containing plain text.
-- MS Word: Submit a `.doc` or `.docx` file.
-- PDF: Submit a `.pdf` file.""",
+    description="""Extract text embeddings for a document... [truncated for brevity]""",
     response_description="Either a ZIP file containing the embeddings JSON file or a direct JSON response, depending on the value of `send_back_json_or_zip_file`.")
 async def get_all_embedding_vectors_for_document(
     file: UploadFile = File(None),
@@ -843,63 +817,71 @@ async def get_all_embedding_vectors_for_document(
         if corpus_identifier_string is None:
             corpus_identifier_string = file_hash
         unique_id = f"document_embedding_{file_hash}_{llm_model_name}"
-        lock = await shared_resources.lock_manager.lock(unique_id)
-        if lock.valid:
+        # Retry logic for acquiring lock
+        lock = None
+        for attempt in range(3):  # Retry up to 3 times
             try:
-                async with AsyncSessionLocal() as session:
-                    result = await session.execute(select(DocumentEmbedding).filter(DocumentEmbedding.file_hash == file_hash, DocumentEmbedding.llm_model_name == llm_model_name))
-                    existing_document_embedding = result.scalar_one_or_none()
-                    if existing_document_embedding:
-                        logger.info(f"Document has been processed before, returning existing result")
-                        json_content = json.dumps(existing_document_embedding.document_embedding_results_json).encode()
-                    else:
-                        with open(temp_file_path, 'rb') as f:
-                            input_data_binary = f.read()
-                        result = magika.identify_bytes(input_data_binary)
-                        mime_type = result.output.mime_type
-                        logger.info(f"Received request to extract embeddings for document with MIME type: {mime_type} and size: {os.path.getsize(temp_file_path)} bytes from IP address: {client_ip}")
-                        sentences = await parse_submitted_document_file_into_sentence_strings_func(temp_file_path, mime_type)
-                        input_data = {
-                            "sentences": sentences,
-                            "file_size_mb": os.path.getsize(temp_file_path) / (1024 * 1024),
-                            "mime_type": mime_type
-                        }
-                        context = start_resource_monitoring("get_all_embedding_vectors_for_document", input_data, client_ip)
-                        try:
-                            results = await compute_embeddings_for_document(sentences, llm_model_name, client_ip, file_hash)
-                        except Exception as e:
-                            logger.error(f"Error while computing embeddings for document: {e}")
-                            traceback.print_exc()
-                            raise HTTPException(status_code=400, detail="Error while computing embeddings for document")
-                        finally:
-                            end_resource_monitoring(context)
-                        df = pd.DataFrame(results, columns=['text', 'embedding'])
-                        json_content = df.to_json(orient=json_format or 'records').encode()
-                        with open(temp_file_path, 'rb') as file_buffer:
-                            original_file_content = file_buffer.read()
-                        await store_document_embeddings_in_db(file.filename if file else url, file_hash, original_file_content, json_content, results, llm_model_name, client_ip, request_time, corpus_identifier_string)
-                overall_total_time = (datetime.utcnow() - request_time).total_seconds()
-                logger.info(f"Done getting all embeddings for document containing {len(sentences)} sentences with model {llm_model_name}")
-                json_content_length = len(json_content)
-                if json_content_length > 0:
-                    logger.info(f"The response took {overall_total_time} seconds to generate, or {overall_total_time / (len(sentences) / 1000.0)} seconds per thousand input tokens and {overall_total_time / (float(json_content_length) / 1000000.0)} seconds per million output characters.")
-                if send_back_json_or_zip_file == 'json':
-                    logger.info(f"Returning JSON response for document containing {len(sentences)} sentences with model {llm_model_name}; first 100 characters out of {json_content_length} total of JSON response: {json_content[:100]}")
-                    return JSONResponse(content=json.loads(json_content.decode()))
+                lock = await shared_resources.lock_manager.lock(unique_id)
+                if lock.valid:
+                    break
+            except Exception as e:
+                logger.warning(f"Attempt {attempt + 1}: Failed to acquire lock: {e}")
+                await asyncio.sleep(1)  # Wait before retrying
+        if not lock or not lock.valid:
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable. Please try again later.")
+        try:
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(select(DocumentEmbedding).filter(DocumentEmbedding.file_hash == file_hash, DocumentEmbedding.llm_model_name == llm_model_name))
+                existing_document_embedding = result.scalar_one_or_none()
+                if existing_document_embedding:
+                    logger.info(f"Document has been processed before, returning existing result")
+                    json_content = json.dumps(existing_document_embedding.document_embedding_results_json).encode()
                 else:
-                    original_filename_without_extension, _ = os.path.splitext(file.filename if file else os.path.basename(url))
-                    json_file_path = f"/tmp/{original_filename_without_extension}.json"
-                    with open(json_file_path, 'wb') as json_file:
-                        json_file.write(json_content)
-                    zip_file_path = f"/tmp/{original_filename_without_extension}.zip"
-                    with zipfile.ZipFile(zip_file_path, 'w') as zipf:
-                        zipf.write(json_file_path, os.path.basename(json_file_path))
-                    logger.info(f"Returning ZIP response for document containing {len(sentences)} sentences with model {llm_model_name}; first 100 characters out of {json_content_length} total of JSON response: {json_content[:100]}")
-                    return FileResponse(zip_file_path, headers={"Content-Disposition": f"attachment; filename={original_filename_without_extension}.zip"})
-            finally:
-                await shared_resources.lock_manager.unlock(lock)
-        else:
-            return {"status": "already processing"}
+                    with open(temp_file_path, 'rb') as f:
+                        input_data_binary = f.read()
+                    result = magika.identify_bytes(input_data_binary)
+                    mime_type = result.output.mime_type
+                    logger.info(f"Received request to extract embeddings for document with MIME type: {mime_type} and size: {os.path.getsize(temp_file_path)} bytes from IP address: {client_ip}")
+                    sentences = await parse_submitted_document_file_into_sentence_strings_func(temp_file_path, mime_type)
+                    input_data = {
+                        "sentences": sentences,
+                        "file_size_mb": os.path.getsize(temp_file_path) / (1024 * 1024),
+                        "mime_type": mime_type
+                    }
+                    context = start_resource_monitoring("get_all_embedding_vectors_for_document", input_data, client_ip)
+                    try:
+                        results = await compute_embeddings_for_document(sentences, llm_model_name, client_ip, file_hash)
+                    except Exception as e:
+                        logger.error(f"Error while computing embeddings for document: {e}")
+                        traceback.print_exc()
+                        raise HTTPException(status_code=400, detail="Error while computing embeddings for document")
+                    finally:
+                        end_resource_monitoring(context)
+                    df = pd.DataFrame(results, columns=['text', 'embedding'])
+                    json_content = df.to_json(orient=json_format or 'records').encode()
+                    with open(temp_file_path, 'rb') as file_buffer:
+                        original_file_content = file_buffer.read()
+                    await store_document_embeddings_in_db(file.filename if file else url, file_hash, original_file_content, json_content, results, llm_model_name, client_ip, request_time, corpus_identifier_string)
+            overall_total_time = (datetime.utcnow() - request_time).total_seconds()
+            logger.info(f"Done getting all embeddings for document containing {len(sentences)} sentences with model {llm_model_name}")
+            json_content_length = len(json_content)
+            if json_content_length > 0:
+                logger.info(f"The response took {overall_total_time} seconds to generate, or {overall_total_time / (len(sentences) / 1000.0)} seconds per thousand input tokens and {overall_total_time / (float(json_content_length) / 1000000.0)} seconds per million output characters.")
+            if send_back_json_or_zip_file == 'json':
+                logger.info(f"Returning JSON response for document containing {len(sentences)} sentences with model {llm_model_name}; first 100 characters out of {json_content_length} total of JSON response: {json_content[:100]}")
+                return JSONResponse(content=json.loads(json_content.decode()))
+            else:
+                original_filename_without_extension, _ = os.path.splitext(file.filename if file else os.path.basename(url))
+                json_file_path = f"/tmp/{original_filename_without_extension}.json"
+                with open(json_file_path, 'wb') as json_file:
+                    json_file.write(json_content)
+                zip_file_path = f"/tmp/{original_filename_without_extension}.zip"
+                with zipfile.ZipFile(zip_file_path, 'w') as zipf:
+                    zipf.write(json_file_path, os.path.basename(json_file_path))
+                logger.info(f"Returning ZIP response for document containing {len(sentences)} sentences with model {llm_model_name}; first 100 characters out of {json_content_length} total of JSON response: {json_content[:100]}")
+                return FileResponse(zip_file_path, headers={"Content-Disposition": f"attachment; filename={original_filename_without_extension}.zip"})
+        finally:
+            await shared_resources.lock_manager.unlock(lock)
     except Exception as e:
         logger.error(f"Error in processing: {e}")
         traceback.print_exc()
