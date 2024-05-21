@@ -1366,26 +1366,28 @@ async def convert_document_to_sentences(
         raise HTTPException(status_code=403, detail="Unauthorized")
     temp_file_path = None
     if file:
-        _, extension = os.path.splitext(file.filename)
-        temp_file = tempfile.NamedTemporaryFile(suffix=extension, delete=False)
+        input_data_binary = await file.read()
+        result = magika.identify_bytes(input_data_binary)
+        detected_data_type = result.output.ct_label
+        temp_file = tempfile.NamedTemporaryFile(suffix=f".{detected_data_type}", delete=False)
         temp_file_path = temp_file.name
         logger.info(f"Temp file path: {temp_file_path}")
         with open(temp_file_path, 'wb') as buffer:
-            chunk_size = 1024
-            chunk = await file.read(chunk_size)
-            while chunk:
-                buffer.write(chunk)
-                chunk = await file.read(chunk_size)
+            buffer.write(input_data_binary)
     elif url and hash and size:
         temp_file_path = await download_file(url, size, hash)
+        with open(temp_file_path, 'rb') as file:
+            input_data_binary = file.read()
+            result = magika.identify_bytes(input_data_binary)
+            detected_data_type = result.output.ct_label
+            new_temp_file_path = temp_file_path + f".{detected_data_type}"
+            os.rename(temp_file_path, new_temp_file_path)
+            temp_file_path = new_temp_file_path
     else:
         raise HTTPException(status_code=400, detail="Invalid input. Provide either a file or URL with hash and size.")
-    with open(temp_file_path, 'rb') as file:
-        input_data_binary = file.read()
-    result = magika.identify_bytes(input_data_binary)
-    mime_type = result.output.mime_type
+    
     try:
-        result = await convert_document_to_sentences_func(temp_file_path, mime_type)
+        result = await convert_document_to_sentences_func(temp_file_path, result.output.mime_type)
     finally:
         os.remove(temp_file_path)
     return JSONResponse(content=result)
