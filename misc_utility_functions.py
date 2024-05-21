@@ -5,6 +5,8 @@ import os
 import re
 import json
 import io
+import redis
+import subprocess
 import sys
 import numpy as np
 import faiss
@@ -244,3 +246,29 @@ class FakeUploadFile:
         return self.file.seek(offset, whence)
     def tell(self) -> int:
         return self.file.tell()
+    
+def configure_redis_optimally(redis_host='localhost', redis_port=6379, maxmemory='1gb'):
+    r = redis.StrictRedis(host=redis_host, port=redis_port, decode_responses=True)
+    def set_config(key, value):
+        response = r.config_set(key, value)
+        if response:
+            print(f"Successfully set {key} to {value}")
+        else:
+            print(f"Failed to set {key} to {value}")
+    set_config('maxmemory', maxmemory)
+    set_config('maxmemory-policy', 'allkeys-lru')
+    set_config('databases', 16)
+    max_clients = os.cpu_count() * 1000
+    set_config('maxclients', max_clients)
+    set_config('timeout', 300)
+    set_config('save', '900 1 300 10 60 10000')
+    set_config('appendonly', 'yes')
+    set_config('appendfsync', 'everysec')
+    set_config('stop-writes-on-bgsave-error', 'no')
+    print("Redis configuration optimized successfully.")
+    print("Restarting Redis server to apply changes...")
+    try:
+        subprocess.run(['sudo', 'systemctl', 'restart', 'redis-server'], check=True)
+        print("Redis server restarted successfully.")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to restart Redis server: {e}")

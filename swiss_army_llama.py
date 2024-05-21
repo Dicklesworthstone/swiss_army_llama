@@ -3,7 +3,7 @@ from shared_resources import initialize_globals, download_models, is_gpu_availab
 from logger_config import setup_logger
 from database_functions import AsyncSessionLocal, DatabaseWriter, get_db_writer
 from ramdisk_functions import clear_ramdisk
-from misc_utility_functions import  build_faiss_indexes, safe_path
+from misc_utility_functions import  build_faiss_indexes, safe_path, configure_redis_optimally
 from embeddings_data_models import DocumentEmbedding, TokenLevelEmbeddingBundle
 from embeddings_data_models import EmbeddingRequest, SemanticSearchRequest, AdvancedSemanticSearchRequest, SimilarityRequest, TextCompletionRequest, AddGrammarRequest
 from embeddings_data_models import EmbeddingResponse, SemanticSearchResponse, AdvancedSemanticSearchResponse, SimilarityResponse, AllStringsResponse, AllDocumentsResponse, TextCompletionResponse, AddGrammarResponse
@@ -18,6 +18,7 @@ import glob
 import json
 import os 
 import signal
+import random
 import re
 import tempfile
 import traceback
@@ -48,7 +49,7 @@ from magika import Magika
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 logger = setup_logger()
 magika = Magika()
-
+configure_redis_optimally()
 gpu_check_results = is_gpu_available()
 logger.info(f"\nGPU check results:\n {gpu_check_results}\n")
 
@@ -768,7 +769,33 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
 
 @app.post("/get_all_embedding_vectors_for_document/",
     summary="Get Embeddings for a Document",
-    description="""Extract text embeddings for a document... [truncated for brevity]""",
+    description="""Extract text embeddings for a document. This endpoint supports plain text, .doc/.docx (MS Word), PDF files, images (using Tesseract OCR), and many other file types supported by the textract library.
+
+### Parameters:
+- `file`: The uploaded document file (either plain text, .doc/.docx, PDF, etc.).
+- `url`: URL of the document file to download.
+- `hash`: SHA3-256 hash of the document file to verify integrity.
+- `size`: Size of the document file in bytes to verify completeness.
+- `llm_model_name`: The model used to calculate embeddings (optional).
+- `json_format`: The format of the JSON response (optional, see details below).
+- `send_back_json_or_zip_file`: Whether to return a JSON file or a ZIP file containing the embeddings file (optional, defaults to `zip`).
+- `token`: Security token (optional).
+- `corpus_identifier_string`: An optional string identifier for grouping documents into a specific corpus.
+
+### JSON Format Options:
+The format of the JSON string returned by the endpoint (default is `records`; these are the options supported by the Pandas `to_json()` function):
+
+- `split` : dict like {`index` -> [index], `columns` -> [columns], `data` -> [values]}
+- `records` : list like [{column -> value}, … , {column -> value}]
+- `index` : dict like {index -> {column -> value}}
+- `columns` : dict like {column -> {index -> value}}
+- `values` : just the values array
+- `table` : dict like {`schema`: {schema}, `data`: {data}}
+
+### Examples:
+- Plain Text: Submit a file containing plain text.
+- MS Word: Submit a `.doc` or `.docx` file.
+- PDF: Submit a `.pdf` file.""",
     response_description="Either a ZIP file containing the embeddings JSON file or a direct JSON response, depending on the value of `send_back_json_or_zip_file`.")
 async def get_all_embedding_vectors_for_document(
     file: UploadFile = File(None),
@@ -817,16 +844,17 @@ async def get_all_embedding_vectors_for_document(
         if corpus_identifier_string is None:
             corpus_identifier_string = file_hash
         unique_id = f"document_embedding_{file_hash}_{llm_model_name}"
-        # Retry logic for acquiring lock
-        lock = None
-        for attempt in range(3):  # Retry up to 3 times
+        # Exponential backoff with jitter for acquiring lock
+        max_retries = 5
+        for attempt in range(max_retries):
             try:
                 lock = await shared_resources.lock_manager.lock(unique_id)
                 if lock.valid:
                     break
             except Exception as e:
-                logger.warning(f"Attempt {attempt + 1}: Failed to acquire lock: {e}")
-                await asyncio.sleep(1)  # Wait before retrying
+                wait_time = (2 ** attempt) + (random.randint(0, 1000) / 1000)
+                logger.warning(f"Attempt {attempt + 1}: Failed to acquire lock: {e}. Retrying in {wait_time:.2f} seconds.")
+                await asyncio.sleep(wait_time)  # Wait before retrying
         if not lock or not lock.valid:
             raise HTTPException(status_code=503, detail="Service temporarily unavailable. Please try again later.")
         try:
