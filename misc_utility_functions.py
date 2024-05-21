@@ -78,7 +78,7 @@ def restart_redis_server():
         print("Redis server restarted successfully.")
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to restart Redis server: {e}")
-        raise        
+        raise
 
 async def build_faiss_indexes():
     global faiss_indexes, token_faiss_indexes, associated_texts_by_model
@@ -128,7 +128,6 @@ async def build_faiss_indexes():
     os.environ["FAISS_SETUP_DONE"] = "1"
     logger.info("Faiss indexes built.")
     return faiss_indexes, token_faiss_indexes, associated_texts_by_model
-
 
 def normalize_logprobs(avg_logprob, min_logprob, max_logprob):
     range_logprob = max_logprob - min_logprob
@@ -289,3 +288,6 @@ def configure_redis_optimally(redis_host='localhost', redis_port=6379, maxmemory
     print("Redis configuration optimized successfully.")
     print("Restarting Redis server to apply changes...")
     restart_redis_server()
+
+def configure_redis_in_background():
+    threading.Thread(target=configure_redis_optimally).start()

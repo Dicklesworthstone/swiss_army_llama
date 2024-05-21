@@ -3,7 +3,7 @@ from shared_resources import initialize_globals, download_models, is_gpu_availab
 from logger_config import setup_logger
 from database_functions import AsyncSessionLocal, DatabaseWriter, get_db_writer
 from ramdisk_functions import clear_ramdisk
-from misc_utility_functions import  build_faiss_indexes, safe_path, configure_redis_optimally
+from misc_utility_functions import  build_faiss_indexes, safe_path, configure_redis_in_background
 from embeddings_data_models import DocumentEmbedding, TokenLevelEmbeddingBundle
 from embeddings_data_models import EmbeddingRequest, SemanticSearchRequest, AdvancedSemanticSearchRequest, SimilarityRequest, TextCompletionRequest, AddGrammarRequest
 from embeddings_data_models import EmbeddingResponse, SemanticSearchResponse, AdvancedSemanticSearchResponse, SimilarityResponse, AllStringsResponse, AllDocumentsResponse, TextCompletionResponse, AddGrammarResponse
@@ -49,7 +49,6 @@ from magika import Magika
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 logger = setup_logger()
 magika = Magika()
-configure_redis_optimally()
 gpu_check_results = is_gpu_available()
 logger.info(f"\nGPU check results:\n {gpu_check_results}\n")
 
@@ -104,6 +103,9 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
     logger.exception(exc)
     return JSONResponse(status_code=500, content={"message": "An unexpected error occurred"})
 
+@app.on_event("startup")
+async def startup_event():
+    configure_redis_in_background()
 
 @app.get("/", include_in_schema=False)
 async def custom_swagger_ui_html():
