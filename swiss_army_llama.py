@@ -860,6 +860,10 @@ async def get_all_embedding_vectors_for_document(
                     context = start_resource_monitoring("get_all_embedding_vectors_for_document", input_data, client_ip)
                     try:
                         results = await compute_embeddings_for_document(sentences, llm_model_name, client_ip, file_hash)
+                    except Exception as e:
+                        logger.error(f"Error while computing embeddings for document: {e}")
+                        traceback.print_exc()
+                        raise HTTPException(status_code=400, detail="Error while computing embeddings for document")
                     finally:
                         end_resource_monitoring(context)                    
                     df = pd.DataFrame(results, columns=['text', 'embedding'])
