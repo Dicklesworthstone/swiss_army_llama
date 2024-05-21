@@ -60,6 +60,25 @@ def is_redis_running(host='localhost', port=6379):
         return False
     finally:
         s.close()
+        
+def start_redis_server():
+    try:
+        # Attempt to start Redis server using the redis-server command
+        subprocess.run(["redis-server"], check=True)
+        print("Redis server started successfully.")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to start Redis server: {e}")
+        raise
+
+def restart_redis_server():
+    try:
+        # Attempt to restart Redis server using the redis-cli shutdown command
+        subprocess.run(["redis-cli", "shutdown"], check=True)
+        subprocess.run(["redis-server"], check=True)
+        print("Redis server restarted successfully.")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to restart Redis server: {e}")
+        raise        
 
 async def build_faiss_indexes():
     global faiss_indexes, token_faiss_indexes, associated_texts_by_model
@@ -248,11 +267,8 @@ class FakeUploadFile:
         return self.file.tell()
     
 def configure_redis_optimally(redis_host='localhost', redis_port=6379, maxmemory='1gb'):
-    try:
-        subprocess.run(["sudo", "systemctl", "start", "redis-server"], check=True)
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Failed to start Redis server: {e}")
-        raise
+    if not is_redis_running(redis_host, redis_port):
+        start_redis_server()
     r = redis.StrictRedis(host=redis_host, port=redis_port, decode_responses=True)
     def set_config(key, value):
         response = r.config_set(key, value)
@@ -272,8 +288,4 @@ def configure_redis_optimally(redis_host='localhost', redis_port=6379, maxmemory
     set_config('stop-writes-on-bgsave-error', 'no')
     print("Redis configuration optimized successfully.")
     print("Restarting Redis server to apply changes...")
-    try:
-        subprocess.run(['sudo', 'systemctl', 'restart', 'redis-server'], check=True)
-        print("Redis server restarted successfully.")
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to restart Redis server: {e}")
+    restart_redis_server()
