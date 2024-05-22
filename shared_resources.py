@@ -171,8 +171,13 @@ def load_model(llm_model_name: str, raise_http_exception: bool = True):
             raise FileNotFoundError
         matching_files.sort(key=os.path.getmtime, reverse=True)
         model_file_path = matching_files[0]
-        with suppress_stdout_stderr():
-            model_instance = llama_cpp.Llama(model_path=model_file_path, use_mlock=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, embedding=True, verbose=False) 
+        gpu_info = is_gpu_available()
+        if gpu_info['gpu_found']:
+            model_instance = llama_cpp.Llama(model_path=model_file_path, embedding=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, verbose=USE_VERBOSE, n_gpu_layers=-1) # Load the model with GPU acceleration
+        else:
+            model_instance = llama_cpp.Llama(model_path=model_file_path, embedding=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, verbose=USE_VERBOSE) # Load the model without GPU acceleration        
+        # with suppress_stdout_stderr():
+            # model_instance = llama_cpp.Llama(model_path=model_file_path, use_mlock=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, embedding=True, verbose=False) 
         embedding_model_cache[llm_model_name] = model_instance
         return model_instance
     except TypeError as e:

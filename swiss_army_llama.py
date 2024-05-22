@@ -448,7 +448,7 @@ async def get_token_level_embeddings_matrix_and_combined_feature_vector_for_stri
                 embedding_bundle.token_level_embeddings_bundle_json = json_content
                 embedding_bundle.response_time = response_time
                 embedding_bundle.total_time = total_time
-                combined_feature_vector = await get_or_compute_token_level_embedding_bundle_combined_feature_vector(embedding_bundle.id, json_content, db_writer)        
+                combined_feature_vector = await get_or_compute_token_level_embedding_bundle_combined_feature_vector(embedding_bundle.id, json_content)        
                 response_content = {
                     'input_text': request.text,
                     'token_level_embedding_bundle': json.loads(embedding_bundle.token_level_embeddings_bundle_json),
@@ -614,7 +614,7 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
     lock = await shared_resources.lock_manager.lock(unique_id)        
     if lock.valid:
         try:                
-            faiss_indexes, token_faiss_indexes, associated_texts_by_model = await build_faiss_indexes()
+            faiss_indexes, token_faiss_indexes, associated_texts_by_model = await build_faiss_indexes(force_rebuild=True)
             request_time = datetime.utcnow()
             llm_model_name = request.llm_model_name
             num_results = request.number_of_most_similar_strings_to_return
@@ -641,10 +641,14 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
                 similarities, indices = faiss_index.search(input_embedding.reshape(1, -1), num_results)  # Search for num_results similar strings
                 results = []  # Create an empty list to store the results
                 for ii in range(num_results):
-                    similarity = float(similarities[0][ii])  # Convert numpy.float32 to native float
-                    most_similar_text = associated_texts_by_model[llm_model_name][indices[0][ii]]
-                    if most_similar_text != request.query_text:  # Don't return the query text as a result
-                        results.append({"search_result_text": most_similar_text, "similarity_to_query_text": similarity})
+                    index = indices[0][ii]
+                    if index < len(associated_texts_by_model[llm_model_name]):
+                        similarity = float(similarities[0][ii])  # Convert numpy.float32 to native float
+                        most_similar_text = associated_texts_by_model[llm_model_name][index]
+                        if most_similar_text != request.query_text:  # Don't return the query text as a result
+                            results.append({"search_result_text": most_similar_text, "similarity_to_query_text": similarity})
+                    else:
+                        logger.warning(f"Index {index} out of range for model {llm_model_name}")
                 response_time = datetime.utcnow()
                 total_time = (response_time - request_time).total_seconds()
                 logger.info(f"Finished searching for the most similar string in the FAISS index in {total_time} seconds. Found {len(results)} results, returning the top {num_results}.")
@@ -711,7 +715,7 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
     lock = await shared_resources.lock_manager.lock(unique_id)        
     if lock.valid:
         try:                
-            faiss_indexes, token_faiss_indexes, associated_texts_by_model = await build_faiss_indexes()
+            faiss_indexes, token_faiss_indexes, associated_texts_by_model = await build_faiss_indexes(force_rebuild=True)
             request_time = datetime.utcnow()
             llm_model_name = request.llm_model_name
             total_entries = len(associated_texts_by_model[llm_model_name])
