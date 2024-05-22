@@ -343,7 +343,15 @@ async def calculate_token_level_embeddings(text: str, llm_model_name: str, corpu
             for word, embedding_list in token_embedding_map.items():
                 response_time = datetime.utcnow()
                 token_level_embedding_json = json.dumps(embedding_list)
-                await store_token_level_embeddings_in_db(word, llm_model_name, token_level_embedding_json, client_ip, request_time, response_time, corpus_identifier_string)
+                await store_token_level_embeddings_in_db(
+                    word=word,
+                    llm_model_name=llm_model_name,
+                    corpus_identifier_string=corpus_identifier_string,
+                    token_level_embedding_json=token_level_embedding_json,
+                    ip_address=client_ip,
+                    request_time=request_time,
+                    response_time=response_time,
+                )
             for i, embedding in enumerate(existing_embeddings):
                 if embedding is None:
                     existing_embeddings[i] = [np.array(embedding) for embedding in token_embedding_map[word_list[i]]]

@@ -1,4 +1,5 @@
 from logger_config import setup_logger
+from embeddings_data_models import TextEmbedding, TokenLevelEmbeddingBundleCombinedFeatureVector
 import socket
 import os
 import re
@@ -12,6 +13,7 @@ import faiss
 from typing import Any
 from database_functions import AsyncSessionLocal
 from sqlalchemy import text as sql_text
+from sqlalchemy import select
 from collections import defaultdict
 logger = setup_logger()
 
@@ -128,14 +130,15 @@ def configure_redis_in_background():
 async def build_faiss_indexes(force_rebuild=False):
     global faiss_indexes, token_faiss_indexes, associated_texts_by_model
     if os.environ.get("FAISS_SETUP_DONE") == "1" and not force_rebuild:
-        logger.info("Faiss indexes already built by another worker. Skipping.")
         return faiss_indexes, token_faiss_indexes, associated_texts_by_model
     faiss_indexes = {}
     token_faiss_indexes = {} # Separate FAISS indexes for token-level embeddings
     associated_texts_by_model = defaultdict(list)  # Create a dictionary to store associated texts by model name
     async with AsyncSessionLocal() as session:
-        result = await session.execute(sql_text("SELECT llm_model_name, text, embedding_json FROM embeddings")) # Query regular embeddings
-        token_result = await session.execute(sql_text("SELECT llm_model_name, word, token_level_embedding_json FROM token_level_embeddings")) # Query token-level embeddings
+        # result = await session.execute(sql_text("SELECT llm_model_name, text, embedding_json FROM embeddings")) # Query regular embeddings
+        # token_result = await session.execute(sql_text("SELECT llm_model_name, input_text, combined_feature_vector_json FROM token_level_embedding_bundle_combined_feature_vectors")) # Query token-level embeddings
+        result = await session.execute(select(TextEmbedding.llm_model_name, TextEmbedding.text, TextEmbedding.embedding_json))
+        token_result = await session.execute(select(TokenLevelEmbeddingBundleCombinedFeatureVector.llm_model_name, TokenLevelEmbeddingBundleCombinedFeatureVector.combined_feature_vector_json, TokenLevelEmbeddingBundleCombinedFeatureVector.token_level_embedding_bundle))
         embeddings_by_model = defaultdict(list)
         token_embeddings_by_model = defaultdict(list)
         for row in result.fetchall(): # Process regular embeddings
@@ -151,27 +154,20 @@ async def build_faiss_indexes(force_rebuild=False):
             if embeddings_array.size == 0:
                 logger.error(f"No embeddings were loaded from the database for model {llm_model_name}, so nothing to build the Faiss index with!")
                 continue
-            logger.info(f"Loaded {len(embeddings_array)} embeddings for model {llm_model_name}.")
-            logger.info(f"Embedding dimension for model {llm_model_name}: {embeddings_array.shape[1]}")
-            logger.info(f"Normalizing {len(embeddings_array)} embeddings for model {llm_model_name}...")
             faiss.normalize_L2(embeddings_array)  # Normalize the vectors for cosine similarity
             faiss_index = faiss.IndexFlatIP(embeddings_array.shape[1])  # Use IndexFlatIP for cosine similarity
             faiss_index.add(embeddings_array)
-            logger.info(f"Faiss index built for model {llm_model_name}.")
             faiss_indexes[llm_model_name] = faiss_index  # Store the index by model name
         for llm_model_name, token_embeddings in token_embeddings_by_model.items():
-            token_embeddings_array = np.array(token_embeddings).astype('float32')
-            if token_embeddings_array.size == 0:
+            token_embeddings_combined_feature_vector =  np.array([e[1] for e in token_embeddings]).astype('float32')
+            if token_embeddings_combined_feature_vector.size == 0:
                 logger.error(f"No token-level embeddings were loaded from the database for model {llm_model_name}, so nothing to build the Faiss index with!")
                 continue
-            logger.info(f"Normalizing {len(token_embeddings_array)} token-level embeddings for model {llm_model_name}...")
-            faiss.normalize_L2(token_embeddings_array)  # Normalize the vectors for cosine similarity
-            token_faiss_index = faiss.IndexFlatIP(token_embeddings_array.shape[1])  # Use IndexFlatIP for cosine similarity
-            token_faiss_index.add(token_embeddings_array)
-            logger.info(f"Token-level Faiss index built for model {llm_model_name}.")
+            faiss.normalize_L2(token_embeddings_combined_feature_vector)  # Normalize the vectors for cosine similarity
+            token_faiss_index = faiss.IndexFlatIP(token_embeddings_combined_feature_vector.shape[1])  # Use IndexFlatIP for cosine similarity
+            token_faiss_index.add(token_embeddings_combined_feature_vector)
             token_faiss_indexes[llm_model_name] = token_faiss_index  # Store the token-level index by model name
     os.environ["FAISS_SETUP_DONE"] = "1"
-    logger.info("Faiss indexes built.")
     return faiss_indexes, token_faiss_indexes, associated_texts_by_model
 
 def normalize_logprobs(avg_logprob, min_logprob, max_logprob):

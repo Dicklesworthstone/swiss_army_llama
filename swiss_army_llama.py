@@ -487,7 +487,7 @@ async def get_token_level_embeddings_matrix_and_combined_feature_vector_for_stri
                             json.dump(response_content, json_file)
                         with zipfile.ZipFile(safe_zip_file_path, 'w') as zipf:
                             zipf.write(safe_json_file_path, os.path.basename(safe_json_file_path))
-                        logger.info(f"Now sending back ZIP file response for input text string {request.text} and model {request.llm_model_name}; First 100 characters of zipped JSON file out of {len(json_content)} total characters: {json_content[:100]}")                            
+                        logger.info(f"Now sending back ZIP file response for input text string '{request.text}' and model {request.llm_model_name}; First 100 characters of zipped JSON file out of {len(json_content)} total characters: '{json_content[:100]}'")                              
                         return FileResponse(safe_zip_file_path, headers={"Content-Disposition": f"attachment; filename={output_file_name_without_extension}.zip"})
                     else:
                         logger.error("Potential path injection attack detected.")
@@ -596,6 +596,7 @@ async def compute_similarity_between_strings(request: SimilarityRequest, req: Re
 The request must contain the following attributes:
 - `query_text`: The input text for which to find the most similar string.
 - `llm_model_name`: The model used to calculate embeddings.
+- `corpus_identifier_string`: An optional string identifier to restrict the search to a specific corpus.
 - `number_of_most_similar_strings_to_return`: (Optional) The number of most similar strings to return, defaults to 10.
 
 ### Example:
@@ -603,8 +604,8 @@ The request must contain the following attributes:
 {
     "query_text": "Find me the most similar string!",
     "llm_model_name": "bge-m3-q8_0",
-    "number_of_most_similar_strings_to_return": 5,
     "corpus_identifier_string": "pastel_related_documentation_corpus"
+    "number_of_most_similar_strings_to_return": 5,
 }
 ```
 

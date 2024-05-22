@@ -2,7 +2,7 @@ from service_functions import validate_bnf_grammar_func
 from typing import List, Dict
 import json
 
-use_grammarbuilder_demo = 1
+use_grammarbuilder_demo = 0
 
 def normalize_json(json_str):
     output = []

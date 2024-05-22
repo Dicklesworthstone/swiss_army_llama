@@ -6,6 +6,7 @@ from pydantic import BaseModel, field_validator
 from typing import List, Optional, Union, Dict
 from decouple import config
 from sqlalchemy import event
+from sqlalchemy.ext.hybrid import hybrid_property
 from datetime import datetime
 
 Base = declarative_base()
@@ -114,7 +115,6 @@ class TokenLevelEmbeddingBundle(Base):
         self.input_text_hash = sha3_256(input_text.encode('utf-8')).hexdigest()
         return input_text
 
-
 class TokenLevelEmbeddingBundleCombinedFeatureVector(Base):
     __tablename__ = "token_level_embedding_bundle_combined_feature_vectors"
     id = Column(Integer, primary_key=True, index=True)
@@ -125,11 +125,13 @@ class TokenLevelEmbeddingBundleCombinedFeatureVector(Base):
     combined_feature_vector_hash = Column(String, index=True)  # Hash of the combined feature vector
     token_level_embedding_bundle = relationship("TokenLevelEmbeddingBundle", back_populates="combined_feature_vector")        
     __table_args__ = (UniqueConstraint('combined_feature_vector_hash', 'llm_model_name', name='_combined_feature_vector_hash_model_uc'),)
+    @hybrid_property
+    def input_text(self):
+        return self.token_level_embedding_bundle.input_text    
     @validates('combined_feature_vector_json')
     def update_text_hash(self, key, combined_feature_vector_json):
         self.combined_feature_vector_hash = sha3_256(combined_feature_vector_json.encode('utf-8')).hexdigest()
         return combined_feature_vector_json
-
 
 # Request/Response models start here:
 

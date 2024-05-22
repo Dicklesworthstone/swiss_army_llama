@@ -8,8 +8,9 @@ from sqlalchemy import text as sql_text
 from sqlalchemy.exc import SQLAlchemyError, OperationalError, IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
-from datetime import datetime
 from decouple import config
+from datetime import datetime, timedelta
+
 logger = setup_logger()
 
 db_writer = None
@@ -141,7 +142,7 @@ async def execute_with_retry(func, *args, **kwargs):
                 raise
     raise OperationalError("Database is locked after multiple retries")
 
-async def initialize_db():
+async def initialize_db(use_verbose = 0):
     logger.info("Initializing database, creating tables, and setting SQLite PRAGMAs...")
     list_of_sqlite_pragma_strings = ["PRAGMA journal_mode=WAL;", "PRAGMA synchronous = NORMAL;", "PRAGMA cache_size = -1048576;", "PRAGMA busy_timeout = 2000;", "PRAGMA wal_autocheckpoint = 100;"]
     list_of_sqlite_pragma_justification_strings = ["Set SQLite to use Write-Ahead Logging (WAL) mode (from default DELETE mode) so that reads and writes can occur simultaneously",
@@ -153,13 +154,27 @@ async def initialize_db():
     async with engine.begin() as conn:
         for pragma_string in list_of_sqlite_pragma_strings:
             await conn.execute(sql_text(pragma_string))
-            logger.info(f"Executed SQLite PRAGMA: {pragma_string}")
-            logger.info(f"Justification: {list_of_sqlite_pragma_justification_strings[list_of_sqlite_pragma_strings.index(pragma_string)]}")
+            if use_verbose:
+                logger.info(f"Executed SQLite PRAGMA: {pragma_string}")
+                logger.info(f"Justification: {list_of_sqlite_pragma_justification_strings[list_of_sqlite_pragma_strings.index(pragma_string)]}")
         try:
             await conn.run_sync(Base.metadata.create_all) # Create tables if they don't exist
-        except Exception as e:
+        except Exception as e:  # noqa: F841
             pass
     logger.info("Database initialization completed.")
 
 def get_db_writer() -> DatabaseWriter:
     return db_writer  # Return the existing DatabaseWriter instance
+
+def delete_expired_rows(session_factory):
+    async def async_delete_expired_rows():
+        async with session_factory() as session:
+            expiration_time = datetime.utcnow() - timedelta(hours=48)
+            expired_rows = await session.execute(
+                select(TokenLevelEmbeddingBundle).where(TokenLevelEmbeddingBundle.created_at < expiration_time)
+            )
+            expired_rows = expired_rows.scalars().all()
+            for row in expired_rows:
+                await session.delete(row)
+            await session.commit()
+    return async_delete_expired_rows

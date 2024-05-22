@@ -102,6 +102,7 @@ Python Requirements:
 aioredis
 aioredlock
 aiosqlite
+apscheduler
 faiss-cpu
 fast_vector_similarity
 fastapi
