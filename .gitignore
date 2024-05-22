@@ -169,3 +169,4 @@ generated_transcript_embeddings_zip_files
 old_logs
 *.csv
 models_url.json
+resource_monitoring_logs.json

@@ -211,14 +211,13 @@ async def get_texts_for_model(llm_model_name: str) -> Dict[str, List[str]]:
             )
     return texts_by_model
 
-async def get_or_compute_embedding(request: EmbeddingRequest, req: Request = None, client_ip: str = None, document_file_hash: str = None) -> dict:
+async def get_or_compute_embedding(request: EmbeddingRequest, req: Request = None, client_ip: str = None, document_file_hash: str = None, use_verbose: bool = True) -> dict:
     request_time = datetime.utcnow()  # Capture request time as datetime object
     ip_address = (
         client_ip or (req.client.host if req else "localhost")
     )  # If client_ip is provided, use it; otherwise, try to get from req; if not available, default to "localhost"
-    logger.info(
-        f"Received request for embedding for '{request.text}' using model '{request.llm_model_name}' from IP address '{ip_address}'"
-    )
+    if use_verbose:
+        logger.info(f"Received request for embedding for '{request.text}' using model '{request.llm_model_name}' from IP address '{ip_address}'")
     embedding_list = await get_embedding_from_db(
         request.text, request.llm_model_name
     )  # Check if embedding exists in the database
@@ -227,9 +226,8 @@ async def get_or_compute_embedding(request: EmbeddingRequest, req: Request = Non
         total_time = (
             response_time - request_time
         ).total_seconds()  # Calculate time taken in seconds
-        logger.info(
-            f"Embedding found in database for '{request.text}' using model '{request.llm_model_name}'; returning in {total_time:.4f} seconds"
-        )
+        if use_verbose:
+            logger.info(f"Embedding found in database for '{request.text}' using model '{request.llm_model_name}'; returning in {total_time:.4f} seconds")
         return {"embedding": embedding_list}
     model = load_model(request.llm_model_name)
     embedding_list = await calculate_sentence_embedding(
@@ -252,9 +250,8 @@ async def get_or_compute_embedding(request: EmbeddingRequest, req: Request = Non
     ).total_seconds()  # Calculate total time using datetime objects
     word_length_of_input_text = len(request.text.split())
     if word_length_of_input_text > 0:
-        logger.info(
-            f"Embedding calculated for '{request.text}' using model '{request.llm_model_name}' in {total_time} seconds, or an average of {total_time/word_length_of_input_text :.2f} seconds per word. Now saving to database..."
-        )
+        if use_verbose:
+            logger.info(f"Embedding calculated for '{request.text}' using model '{request.llm_model_name}' in {total_time:,.2f} seconds, or an average of {total_time/word_length_of_input_text :.2f} seconds per word. Now saving to database...")
     await save_embedding_to_db(
         text=request.text,
         llm_model_name=request.llm_model_name,
@@ -330,7 +327,7 @@ async def calculate_token_level_embeddings(text: str, llm_model_name: str, corpu
     logger.info(f"Loading model: '{llm_model_name}'")
     llm = load_token_level_embedding_model(llm_model_name)
     word_list = text.split()
-    logger.info(f"Transformed input text into {len(word_list)} words/expressions")
+    logger.info(f"Transformed input text into {len(word_list):,} words/expressions")
     async def fetch_existing_embeddings(word: str) -> Optional[List[np.array]]:
         existing_embeddings = await get_token_level_embeddings_from_db(word, llm_model_name)
         if existing_embeddings is not None:
@@ -340,7 +337,7 @@ async def calculate_token_level_embeddings(text: str, llm_model_name: str, corpu
     existing_embeddings = await asyncio.gather(*[fetch_existing_embeddings(word) for word in word_list])
     missing_words = [word for word, embedding in zip(word_list, existing_embeddings) if embedding is None]
     if missing_words:
-        logger.info(f"Computing embeddings for {len(missing_words)} missing words/expressions in batch")
+        logger.info(f"Computing embeddings for {len(missing_words):,} missing words/expressions in batch")
         try:
             token_embeddings_object = llm.embed(missing_words)
             token_embedding_map = {word: embeddings for word, embeddings in zip(missing_words, token_embeddings_object)}
@@ -389,7 +386,7 @@ async def store_token_level_embeddings_in_db(word: str, llm_model_name: str, cor
 async def compute_token_level_embedding_bundle_combined_feature_vector(token_level_embeddings_df) -> List[float]:
     start_time = datetime.utcnow()
     token_level_embeddings_list = token_level_embeddings_df['embedding'].tolist()
-    logger.info(f"token_level_embeddings_list length: {len(token_level_embeddings_list)}")
+    logger.info(f"token_level_embeddings_list length: {len(token_level_embeddings_list):,}")
     # Check if all embedding vectors have the same length
     embedding_lengths = [len(embedding) for embedding in token_level_embeddings_list]
     if len(set(embedding_lengths)) != 1:
@@ -456,7 +453,7 @@ async def calculate_sentence_embedding(llama, text: str) -> np.array:
             logger.error(traceback.format_exc())
             text = text[:-int(len(text) * 0.1)]
             retry_count += 1
-            logger.info(f"Trimming sentence due to too many tokens. New length: {len(text)}")
+            logger.info(f"Trimming sentence due to too many tokens. New length: {len(text):,}")
     if sentence_embedding_vector is None:
         logger.error("Failed to calculate sentence embedding after multiple attempts")
     return sentence_embedding_vector
@@ -480,7 +477,7 @@ async def calculate_sentence_embeddings_list(llama, texts: list) -> list:
             logger.error(traceback.format_exc())
             texts = [text[:-int(len(text) * 0.1)] for text in texts]
             retry_count += 1
-            logger.info(f"Trimming sentences due to too many tokens. New lengths: {[len(text) for text in texts]}")
+            logger.info(f"Trimming sentences due to too many tokens. New lengths: {[len(text) for text in texts]:,}")
     if sentence_embeddings_vectors is None:
         logger.error("Failed to calculate sentence embeddings after multiple attempts")
     return sentence_embeddings_vectors
@@ -489,7 +486,7 @@ async def compute_embeddings_for_document(strings: list, llm_model_name: str, co
     results = []
     strings = [prepare_string_for_embedding(text) for text in strings]    
     if USE_PARALLEL_INFERENCE_QUEUE:
-        logger.info(f"Using parallel inference queue to compute embeddings for {len(strings)} strings")
+        logger.info(f"Using parallel inference queue to compute embeddings for {len(strings):,} strings")
         start_time = time.perf_counter()
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS)
         model = load_model(llm_model_name)
@@ -528,7 +525,7 @@ async def compute_embeddings_for_document(strings: list, llm_model_name: str, co
         end_time = time.perf_counter()
         duration = end_time - start_time
         if len(strings) > 0:
-            logger.info(f"Parallel inference task for {len(strings)} strings completed in {duration:.2f} seconds; {duration / len(strings):.2f} seconds per string")
+            logger.info(f"Parallel inference task for {len(strings):,} strings completed in {duration:.2f} seconds; {duration / len(strings):.2f} seconds per string")
     else:
         logger.info(f"Using sequential inference to compute embeddings for {len(strings)} strings")
         start_time = time.perf_counter()
@@ -555,7 +552,7 @@ async def compute_embeddings_for_document(strings: list, llm_model_name: str, co
         end_time = time.perf_counter()
         duration = end_time - start_time
         if len(strings) > 0:
-            logger.info(f"Sequential inference task for {len(strings)} strings completed in {duration:.2f} seconds; {duration / len(strings):.2f} seconds per string")
+            logger.info(f"Sequential inference task for {len(strings):,} strings completed in {duration:.2f} seconds; {duration / len(strings):.2f} seconds per string")
     filtered_results = [(text, embedding) for text, embedding in results if embedding is not None]
     return filtered_results
 
@@ -563,7 +560,7 @@ async def compute_embeddings_for_document_old(strings: list, llm_model_name: str
     from swiss_army_llama import get_embedding_vector_for_string
     results = []
     if USE_PARALLEL_INFERENCE_QUEUE:
-        logger.info(f"Using parallel inference queue to compute embeddings for {len(strings)} strings")
+        logger.info(f"Using parallel inference queue to compute embeddings for {len(strings):,} strings")
         start_time = time.perf_counter()  # Record the start time
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS)
         async def compute_embedding(text):  # Define a function to compute the embedding for a given text
@@ -580,7 +577,7 @@ async def compute_embeddings_for_document_old(strings: list, llm_model_name: str
         end_time = time.perf_counter()  # Record the end time
         duration = end_time - start_time
         if len(strings) > 0:
-            logger.info(f"Parallel inference task for {len(strings)} strings completed in {duration:.2f} seconds; {duration / len(strings):.2f} seconds per string")
+            logger.info(f"Parallel inference task for {len(strings):,} strings completed in {duration:.2f} seconds; {duration / len(strings):.2f} seconds per string")
     else:  # Compute embeddings sequentially
         logger.info(f"Using sequential inference to compute embeddings for {len(strings)} strings")
         start_time = time.perf_counter()  # Record the start time
@@ -591,7 +588,7 @@ async def compute_embeddings_for_document_old(strings: list, llm_model_name: str
         end_time = time.perf_counter()  # Record the end time
         duration = end_time - start_time
         if len(strings) > 0:
-            logger.info(f"Sequential inference task for {len(strings)} strings completed in {duration:.2f} seconds; {duration / len(strings):.2f} seconds per string")
+            logger.info(f"Sequential inference task for {len(strings):,} strings completed in {duration:.2f} seconds; {duration / len(strings):.2f} seconds per string")
     filtered_results = [(text, embedding) for text, embedding in results if embedding is not None] # Filter out results with None embeddings (applicable to parallel processing) and return
     return filtered_results
 
@@ -657,7 +654,7 @@ async def store_document_embeddings_in_db(file: File,
     document.update_hash()  # This will trigger the SQLAlchemy event to update the document_hash
     await shared_resources.db_writer.enqueue_write([document, document_embedding])  # Enqueue the write operation for the document embedding
     write_operations = []  # Collect text embeddings to write
-    logger.info(f"Storing {len(results)} text embeddings in database")
+    logger.info(f"Storing {len(results):,} text embeddings in database")
     for text, embedding in results:
         embedding_entry = await _get_embedding_from_db(text, llm_model_name)
         if not embedding_entry:
@@ -742,7 +739,7 @@ async def generate_completion_from_llm(request: TextCompletionRequest, req: Requ
         if request.grammar_file_string == 'json':
             generated_text = generated_text.encode('unicode_escape').decode()
         llm_model_usage_json = json.dumps(current_completion_output['usage'])
-        logger.info(f"Completed text completion {idx} in an average of {total_time_per_completion:.2f} seconds for input prompt: '{request.input_prompt}'; Beginning of generated text: \n'{generated_text[:100]}'...")
+        logger.info(f"Completed text completion {idx:,} in an average of {total_time_per_completion:,.2f} seconds for input prompt: '{request.input_prompt}'; Beginning of generated text: \n'{generated_text[:100]}'...")
         response = TextCompletionResponse(input_prompt = request.input_prompt,
                                             llm_model_name = request.llm_model_name,
                                             grammar_file_string = request.grammar_file_string,
@@ -927,7 +924,7 @@ async def compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio
             "text": segment.text,
             "avg_logprob": round(segment.avg_logprob, 2)
         }
-        logger.info(f"Details of transcript segment {idx} from file {audio_file_name}: {details}")
+        logger.info(f"Details of transcript segment {idx:,} from file {audio_file_name}: {details}")
         segment_details.append(details)
     combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, list_of_transcript_sentences = merge_transcript_segments_into_combined_text(segment_details)    
     if compute_embeddings_for_resulting_transcript_document:
@@ -936,7 +933,7 @@ async def compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio
         download_url = ''
     response_time = datetime.utcnow()
     total_time = (response_time - request_time).total_seconds()
-    logger.info(f"Transcript computed in {total_time} seconds.")
+    logger.info(f"Transcript computed in {total_time:,.2f} seconds.")
     await save_transcript_to_db(audio_file_hash, audio_file_name, audio_file_size_mb, segment_details, info, ip_address, request_time, response_time, total_time, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, corpus_identifier_string)
     info_dict = info._asdict()
     return segment_details, info_dict, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, request_time, response_time, total_time, download_url

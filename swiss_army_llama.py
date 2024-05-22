@@ -182,7 +182,7 @@ async def get_all_stored_strings(req: Request, token: str = None) -> AllStringsR
         async with AsyncSessionLocal() as session:
             result = await session.execute(sql_text("SELECT DISTINCT text FROM embeddings"))
             all_strings = [row[0] for row in result.fetchall()]
-        logger.info(f"Retrieved {len(all_strings)} stored strings with computed embeddings from the database; Last 10 embedded strings: {all_strings[-10:]}")
+        logger.info(f"Retrieved {len(all_strings):,} stored strings with computed embeddings from the database; Last 10 embedded strings: {all_strings[-10:]}")
         return {"strings": all_strings}
     except Exception as e:
         logger.error(f"An error occurred while processing the request: {e}")
@@ -218,7 +218,7 @@ async def get_all_stored_documents(req: Request, token: str = None) -> AllDocume
         async with AsyncSessionLocal() as session:
             result = await session.execute(sql_text("SELECT DISTINCT filename FROM document_embeddings"))
             all_documents = [row[0] for row in result.fetchall()]
-        logger.info(f"Retrieved {len(all_documents)} stored documents with computed embeddings from the database; Last 10 processed document filenames: {all_documents[-10:]}")
+        logger.info(f"Retrieved {len(all_documents):,} stored documents with computed embeddings from the database; Last 10 processed document filenames: {all_documents[-10:]}")
         return {"documents": all_documents}
     except Exception as e:
         logger.error(f"An error occurred while processing the request: {e}")
@@ -403,7 +403,7 @@ async def get_token_level_embeddings_matrix_and_combined_feature_vector_for_stri
     send_back_json_or_zip_file: str = 'zip'
 ) -> Response:
     request.text = prepare_string_for_embedding(request.text)
-    logger.info(f"Received request for token embeddings with text length {len(request.text)} and model: '{request.llm_model_name}' from client IP: {client_ip}; input text: {request.text}")
+    logger.info(f"Received request for token embeddings with text length {len(request.text):,} and model: '{request.llm_model_name}' from client IP: {client_ip}; input text: {request.text}")
     request_time = datetime.utcnow()
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
         logger.warning(f"Unauthorized request from client IP {client_ip}")
@@ -442,7 +442,7 @@ async def get_token_level_embeddings_matrix_and_combined_feature_vector_for_stri
                 )
                 word_list, token_embeddings = await calculate_token_level_embeddings(request.text, request.llm_model_name, request.corpus_identifier_string, client_ip)
                 lengths, max_length, min_length = analyze_token_embeddings(token_embeddings) 
-                logger.info(f"Split input text into {len(token_embeddings)} words/expressions. Organizing results.")
+                logger.info(f"Split input text into {len(token_embeddings):,} words/expressions. Organizing results.")
                 logger.info(f"LLM tokens per word of input text: {str([x for x in zip(word_list,lengths)])}")   
                 embedding_lengths = [len(embedding) for embeddings in token_embeddings for embedding in embeddings]
                 if len(set(embedding_lengths)) != 1:
@@ -563,7 +563,7 @@ async def compute_similarity_between_strings(request: SimilarityRequest, req: Re
                     raise HTTPException(status_code=400, detail="Invalid similarity measure specified")
             response_time = datetime.utcnow()
             total_time = (response_time - request_time).total_seconds()
-            logger.info(f"Computed similarity using {similarity_measure} in {total_time} seconds; similarity score: {similarity_score}")
+            logger.info(f"Computed similarity using {similarity_measure} in {total_time:,.2f} seconds; similarity score: {similarity_score:,.6f}")
             return {
                 "text1": request.text1,
                 "text2": request.text2,
@@ -640,11 +640,11 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
             total_entries = len(associated_texts_by_model[llm_model_name])  # Get the total number of entries for the model
             num_results = min(num_results, total_entries)  # Ensure num_results doesn't exceed the total number of entries
             num_results_before_corpus_filter = min(num_results_before_corpus_filter, total_entries)  # Ensure num_results_before_corpus_filter doesn't exceed the total number of entries
-            logger.info(f"Received request to find {num_results} most similar strings for query text: `{request.query_text}` using model: {llm_model_name} and corpus: {request.corpus_identifier_string}")
+            logger.info(f"Received request to find {num_results:,} most similar strings for query text: `{request.query_text}` using model: {llm_model_name} and corpus: {request.corpus_identifier_string}")
             try:
                 logger.info(f"Computing embedding for input text: {request.query_text}")
                 embedding_request = EmbeddingRequest(text=request.query_text, llm_model_name=request.llm_model_name, corpus_identifier_string=request.corpus_identifier_string)
-                embedding_response = await get_embedding_vector_for_string(embedding_request, req)
+                embedding_response = await get_or_compute_embedding(embedding_request, req)                 
                 input_embedding = np.array(embedding_response["embedding"]).astype('float32').reshape(1, -1)
                 faiss.normalize_L2(input_embedding)  # Normalize the input vector for cosine similarity
                 logger.info(f"Computed embedding for input text: {request.query_text}")
@@ -668,7 +668,7 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
                         logger.warning(f"Index {index} out of range for model {llm_model_name}")
                 response_time = datetime.utcnow()
                 total_time = (response_time - request_time).total_seconds()
-                logger.info(f"Finished searching for the most similar string in the FAISS index in {total_time} seconds. Found {len(results)} results, returning the top {num_results}.")
+                logger.info(f"Finished searching for the most similar string in the FAISS index in {total_time:,.2f} seconds. Found {len(results):,} results, returning the top {num_results:,}.")
                 logger.info(f"Found most similar strings for query string {request.query_text}: {results}")
                 return {"query_text": request.query_text, "corpus_identifier_string": request.corpus_identifier_string,"results": results}  # Return the response matching the SemanticSearchResponse model
             except Exception as e:
@@ -680,8 +680,8 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
     else:
         return {"status": "already processing"}
         
-        
-        
+
+
 @app.post("/advanced_search_stored_embeddings_with_query_string_for_semantic_similarity/",
         response_model=AdvancedSemanticSearchResponse,
         summary="Advanced Semantic Search with Two-Step Similarity Measures",
@@ -745,7 +745,7 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
             try:
                 logger.info(f"Computing embedding for input text: {request.query_text}")
                 embedding_request = EmbeddingRequest(text=request.query_text, llm_model_name=llm_model_name)
-                embedding_response = await get_embedding_vector_for_string(embedding_request, req)
+                embedding_response = await get_or_compute_embedding(embedding_request, req)                   
                 input_embedding = np.array(embedding_response["embedding"]).astype('float32').reshape(1, -1)
                 faiss.normalize_L2(input_embedding)
                 logger.info(f"Computed embedding for input text: {request.query_text}")
@@ -765,7 +765,7 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
                 final_results = []
                 for _, associated_text in similarity_results:
                     embedding_request = EmbeddingRequest(text=associated_text, llm_model_name=llm_model_name)
-                    embedding_response = await get_embedding_vector_for_string(embedding_request, req)
+                    embedding_response = await get_or_compute_embedding(request=embedding_request, req=req, use_verbose=False)                       
                     filtered_embedding = np.array(embedding_response["embedding"])
                     params = {
                         "vector_1": input_embedding.tolist()[0],
@@ -789,9 +789,6 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
                 raise HTTPException(status_code=500, detail="Internal Server Error")
         finally:
             await shared_resources.lock_manager.unlock(lock)
-    else:
-        return {"status": "already processing"}
-
     
 
 @app.post("/get_all_embedding_vectors_for_document/",
@@ -879,7 +876,7 @@ async def get_all_embedding_vectors_for_document(
                     break
             except Exception as e:
                 wait_time = (2 ** attempt) + (random.randint(0, 1000) / 1000)
-                logger.warning(f"Attempt {attempt + 1}: Failed to acquire lock: {e}. Retrying in {wait_time:.2f} seconds.")
+                logger.warning(f"Attempt {attempt + 1}: Failed to acquire lock: {e}. Retrying in {wait_time:,.2f} seconds.")
                 await asyncio.sleep(wait_time)  # Wait before retrying
         if not lock or not lock.valid:
             raise HTTPException(status_code=503, detail="Service temporarily unavailable. Please try again later.")
@@ -917,12 +914,12 @@ async def get_all_embedding_vectors_for_document(
                         original_file_content = file_buffer.read()
                     await store_document_embeddings_in_db(file, file_hash, original_file_content, json_content, results, llm_model_name, corpus_identifier_string, client_ip, request_time)
             overall_total_time = (datetime.utcnow() - request_time).total_seconds()
-            logger.info(f"Done getting all embeddings for document containing {len(sentences)} sentences with model {llm_model_name} and corpus {corpus_identifier_string}")
+            logger.info(f"Done getting all embeddings for document containing {len(sentences):,} sentences with model {llm_model_name} and corpus {corpus_identifier_string}")
             json_content_length = len(json_content)
             if json_content_length > 0:
                 logger.info(f"The response took {overall_total_time:,.2f} seconds to generate, or {overall_total_time / (len(sentences) / 1000.0):,.2f} seconds per thousand input tokens and {overall_total_time / (float(json_content_length) / 1000000.0):,.2f} seconds per million output characters.")
             if send_back_json_or_zip_file == 'json':
-                logger.info(f"Returning JSON response for document containing {len(sentences)} sentences with model {llm_model_name}; first 100 characters out of {json_content_length} total of JSON response: {json_content[:100]}")
+                logger.info(f"Returning JSON response for document containing {len(sentences):,} sentences with model {llm_model_name}; first 100 characters out of {json_content_length:,} total of JSON response: {json_content[:100]}")
                 return JSONResponse(content=json.loads(json_content.decode()))
             else:
                 original_filename_without_extension, _ = os.path.splitext(file.filename if file else os.path.basename(url))
@@ -932,7 +929,7 @@ async def get_all_embedding_vectors_for_document(
                 zip_file_path = f"/tmp/{original_filename_without_extension}.zip"
                 with zipfile.ZipFile(zip_file_path, 'w') as zipf:
                     zipf.write(json_file_path, os.path.basename(json_file_path))
-                logger.info(f"Returning ZIP response for document containing {len(sentences)} sentences with model {llm_model_name}; first 100 characters out of {json_content_length} total of JSON response: {json_content[:100]}")
+                logger.info(f"Returning ZIP response for document containing {len(sentences):,} sentences with model {llm_model_name}; first 100 characters out of {json_content_length:,} total of JSON response: {json_content[:100]}")
                 return FileResponse(zip_file_path, headers={"Content-Disposition": f"attachment; filename={original_filename_without_extension}.zip"})
         finally:
             await shared_resources.lock_manager.unlock(lock)
@@ -984,7 +981,7 @@ The response will include the generated text completion, the time taken to compu
         "grammar_file_string": "json",
         "number_of_tokens_to_generate": 500,
         "number_of_completions_to_generate": 3,
-        "time_taken_in_seconds": 67.17598033333333,
+        "time_taken_in_seconds": 67.17,
         "generated_text": "{\"kings\":[\\n    {\\n        \"name\": \"Henry IV\",\\n        \"reign_start\": 1589,\\n        \"reign_end\": 1610\\n    },\\n    {\\n        \"name\": \"Louis XIII\",\\n        \"reign_start\": 1610,\\n        \"reign_end\": 1643\\n    },\\n    {\\n        \"name\": \"Louis XIV\",\\n        \"reign_start\": 1643,\\n        \"reign_end\": 1715\\n    },\\n    {\\n        \"name\": \"Louis XV\",\\n        \"reign_start\": 1715,\\n        \"reign_end\": 1774\\n    },\\n    {\\n        \"name\": \"Louis XVI\",\\n        \"reign_start\": 1774,\\n        \"reign_end\": 1792\\n    }\\n]}",
         "llm_model_usage_json": "{\"prompt_tokens\": 13, \"completion_tokens\": 218, \"total_tokens\": 231}"
     },
@@ -994,7 +991,7 @@ The response will include the generated text completion, the time taken to compu
         "grammar_file_string": "json",
         "number_of_tokens_to_generate": 500,
         "number_of_completions_to_generate": 3,
-        "time_taken_in_seconds": 67.17598033333333,
+        "time_taken_in_seconds": 67.17,
         "generated_text": "{\"kings\":\\n   [ {\"name\": \"Henry IV\",\\n      \"reignStart\": \"1589\",\\n      \"reignEnd\": \"1610\"},\\n     {\"name\": \"Louis XIII\",\\n      \"reignStart\": \"1610\",\\n      \"reignEnd\": \"1643\"},\\n     {\"name\": \"Louis XIV\",\\n      \"reignStart\": \"1643\",\\n      \"reignEnd\": \"1715\"}\\n   ]}",
         "llm_model_usage_json": "{\"prompt_tokens\": 13, \"completion_tokens\": 115, \"total_tokens\": 128}"
     },
@@ -1004,7 +1001,7 @@ The response will include the generated text completion, the time taken to compu
         "grammar_file_string": "json",
         "number_of_tokens_to_generate": 500,
         "number_of_completions_to_generate": 3,
-        "time_taken_in_seconds": 67.17598033333333,
+        "time_taken_in_seconds": 67.17,
         "generated_text": "{\\n\"Henri IV\": \"1589-1610\",\\n\"Louis XIII\": \"1610-1643\",\\n\"Louis XIV\": \"1643-1715\",\\n\"Louis XV\": \"1715-1774\",\\n\"Louis XVI\": \"1774-1792\",\\n\"Louis XVIII\": \"1814-1824\",\\n\"Charles X\": \"1824-1830\",\\n\"Louis XIX (previously known as Charles X): \" \\n    : \"1824-1830\",\\n\"Charles X (previously known as Louis XIX)\": \"1824-1830\"}",
         "llm_model_usage_json": "{\"prompt_tokens\": 13, \"completion_tokens\": 168, \"total_tokens\": 181}"
     }
@@ -1204,7 +1201,7 @@ async def compute_transcript_with_whisper_from_audio(
     audio_file_size_mb = os.path.getsize(temp_file_path) / (1024 * 1024)
     input_data = {
         "file_size_mb": audio_file_size_mb,
-        "audio_duration_seconds": get_audio_duration_seconds(temp_file_path)
+        "audio_duration_seconds": round(get_audio_duration_seconds(temp_file_path), 2)
     }
     context = start_resource_monitoring("compute_transcript_with_whisper_from_audio", input_data, req.client.host if req else "localhost")
     try:
