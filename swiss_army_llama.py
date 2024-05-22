@@ -529,7 +529,7 @@ The request must contain the following attributes:
 ```""")
 async def compute_similarity_between_strings(request: SimilarityRequest, req: Request, token: str = None) -> SimilarityResponse:
     request.text1 = prepare_string_for_embedding(request.text1)
-    request.text1 = prepare_string_for_embedding(request.text2)
+    request.text2 = prepare_string_for_embedding(request.text2)
     logger.info(f"Received request: {request}")
     request_time = datetime.utcnow()
     similarity_measure = request.similarity_measure.lower()
@@ -542,8 +542,8 @@ async def compute_similarity_between_strings(request: SimilarityRequest, req: Re
             client_ip = req.client.host if req else "localhost"
             embedding_request1 = EmbeddingRequest(text=request.text1, llm_model_name=request.llm_model_name)
             embedding_request2 = EmbeddingRequest(text=request.text2, llm_model_name=request.llm_model_name)
-            embedding1_response = await get_or_compute_embedding(embedding_request1, client_ip=client_ip)
-            embedding2_response = await get_or_compute_embedding(embedding_request2, client_ip=client_ip)
+            embedding1_response = await get_or_compute_embedding(request=embedding_request1, req=req, client_ip=client_ip, use_verbose=False)
+            embedding2_response = await get_or_compute_embedding(request=embedding_request2, req=req, client_ip=client_ip, use_verbose=False)
             embedding1 = np.array(embedding1_response["embedding"])
             embedding2 = np.array(embedding2_response["embedding"])
             if embedding1.size == 0 or embedding2.size == 0:
@@ -563,7 +563,7 @@ async def compute_similarity_between_strings(request: SimilarityRequest, req: Re
                     raise HTTPException(status_code=400, detail="Invalid similarity measure specified")
             response_time = datetime.utcnow()
             total_time = (response_time - request_time).total_seconds()
-            logger.info(f"Computed similarity using {similarity_measure} in {total_time:,.2f} seconds; similarity score: {similarity_score:,.6f}")
+            logger.info(f"Computed similarity using {similarity_measure} in {total_time:,.2f} seconds; similarity score: {similarity_score}")
             return {
                 "text1": request.text1,
                 "text2": request.text2,

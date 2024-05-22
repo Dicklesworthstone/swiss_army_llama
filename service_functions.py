@@ -141,7 +141,6 @@ async def _get_embedding_from_db(text_hash: str, llm_model_name: str) -> Optiona
         row = result.fetchone()
         if row:
             embedding_json = row[0]
-            logger.info(f"Embedding found in database for text hash '{text_hash}' using model '{llm_model_name}'")
             return json.loads(embedding_json)
         return None
     
