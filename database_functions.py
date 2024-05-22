@@ -36,7 +36,7 @@ class DatabaseWriter:
             TextEmbedding: 'text_hash',
             DocumentEmbedding: 'file_hash',
             Document: 'document_hash',
-            TokenLevelEmbedding: 'token_hash',
+            TokenLevelEmbedding: 'word_hash',
             TokenLevelEmbeddingBundle: 'input_text_hash',
             TokenLevelEmbeddingBundleCombinedFeatureVector: 'combined_feature_vector_hash',
             AudioTranscript: 'audio_file_hash'
@@ -52,7 +52,7 @@ class DatabaseWriter:
                 (select(TextEmbedding.text_hash, TextEmbedding.llm_model_name), True),
                 (select(DocumentEmbedding.file_hash, DocumentEmbedding.llm_model_name), True),
                 (select(Document.document_hash, Document.llm_model_name), True),
-                (select(TokenLevelEmbedding.token_hash, TokenLevelEmbedding.llm_model_name), True),
+                (select(TokenLevelEmbedding.word_hash, TokenLevelEmbedding.llm_model_name), True),
                 (select(TokenLevelEmbeddingBundle.input_text_hash, TokenLevelEmbeddingBundle.llm_model_name), True),
                 (select(TokenLevelEmbeddingBundleCombinedFeatureVector.combined_feature_vector_hash, TokenLevelEmbeddingBundleCombinedFeatureVector.llm_model_name), True),
                 (select(AudioTranscript.audio_file_hash), False)
@@ -78,10 +78,10 @@ class DatabaseWriter:
 
     async def _handle_integrity_error(self, e, write_operation, session):
         unique_constraint_msg = {
-            TextEmbedding: "token_embeddings.token_hash, token_embeddings.llm_model_name",
+            TextEmbedding: "token_embeddings.text_hash, token_embeddings.llm_model_name",
             DocumentEmbedding: "document_embeddings.file_hash, document_embeddings.llm_model_name",
             Document: "documents.document_hash, documents.llm_model_name",
-            TokenLevelEmbedding: "token_level_embeddings.token_hash, token_level_embeddings.llm_model_name",
+            TokenLevelEmbedding: "token_level_embeddings.word_hash, token_level_embeddings.llm_model_name",
             TokenLevelEmbeddingBundle: "token_level_embedding_bundles.input_text_hash, token_level_embedding_bundles.llm_model_name",
             AudioTranscript: "audio_transcripts.audio_file_hash"
         }.get(type(write_operation))

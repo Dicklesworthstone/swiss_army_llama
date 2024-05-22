@@ -3,13 +3,13 @@ from shared_resources import initialize_globals, download_models, is_gpu_availab
 from logger_config import setup_logger
 from database_functions import AsyncSessionLocal, DatabaseWriter, get_db_writer
 from ramdisk_functions import clear_ramdisk
-from misc_utility_functions import  build_faiss_indexes, safe_path, configure_redis_optimally
+from misc_utility_functions import  build_faiss_indexes, safe_path, configure_redis_optimally, analyze_token_embeddings
 from embeddings_data_models import DocumentEmbedding, TokenLevelEmbeddingBundle
 from embeddings_data_models import EmbeddingRequest, SemanticSearchRequest, AdvancedSemanticSearchRequest, SimilarityRequest, TextCompletionRequest, AddGrammarRequest
 from embeddings_data_models import EmbeddingResponse, SemanticSearchResponse, AdvancedSemanticSearchResponse, SimilarityResponse, AllStringsResponse, AllDocumentsResponse, TextCompletionResponse, AddGrammarResponse
 from embeddings_data_models import ShowLogsIncrementalModel
-from service_functions import get_or_compute_embedding, get_or_compute_transcript, add_model_url, get_or_compute_token_level_embedding_bundle_combined_feature_vector, calculate_token_level_embeddings, download_file, start_resource_monitoring, end_resource_monitoring, get_texts_for_corpus_identifier, get_texts_for_model
-from service_functions import parse_submitted_document_file_into_sentence_strings_func, compute_embeddings_for_document, store_document_embeddings_in_db, generate_completion_from_llm, validate_bnf_grammar_func, convert_document_to_sentences_func, get_audio_duration_seconds
+from service_functions import get_or_compute_embedding, get_or_compute_transcript, add_model_url, get_or_compute_token_level_embedding_bundle_combined_feature_vector, calculate_token_level_embeddings, download_file, start_resource_monitoring, end_resource_monitoring, get_list_of_corpus_identifiers_from_list_of_embedding_texts
+from service_functions import parse_submitted_document_file_into_sentence_strings_func, compute_embeddings_for_document, store_document_embeddings_in_db, generate_completion_from_llm, validate_bnf_grammar_func, convert_document_to_sentences_func, get_audio_duration_seconds, prepare_string_for_embedding
 from grammar_builder import GrammarBuilder
 from log_viewer_functions import show_logs_incremental_func, show_logs_func
 from uvicorn_config import option
@@ -297,7 +297,8 @@ The request must contain the following attributes:
 ```json
 {
     "text": "This is a sample text.",
-    "llm_model_name": "bge-m3-q8_0"
+    "llm_model_name": "bge-m3-q8_0",
+    "corpus_identifier_string": "pastel_related_documentation_corpus"
 }
 ```
 
@@ -315,6 +316,7 @@ async def get_embedding_vector_for_string(request: EmbeddingRequest, req: Reques
         logger.warning(f"Unauthorized request from client IP {client_ip}")
         raise HTTPException(status_code=403, detail="Unauthorized")
     try:
+        request.text = prepare_string_for_embedding(request.text)
         unique_id = f"get_embedding_{request.text}_{request.llm_model_name}"
         lock = await shared_resources.lock_manager.lock(unique_id)
         if lock.valid:
@@ -356,7 +358,8 @@ The request must contain the following attributes:
 ```json
 {
     "text": "This is a sample text.",
-    "llm_model_name": "Meta-Llama-3-8B-Instruct.Q3_K_S"
+    "llm_model_name": "Meta-Llama-3-8B-Instruct.Q3_K_S",
+    "corpus_identifier_string": "pastel_related_documentation_corpus"
 }
 ```
 
@@ -399,6 +402,7 @@ async def get_token_level_embeddings_matrix_and_combined_feature_vector_for_stri
     json_format: str = 'records',
     send_back_json_or_zip_file: str = 'zip'
 ) -> Response:
+    request.text = prepare_string_for_embedding(request.text)
     logger.info(f"Received request for token embeddings with text length {len(request.text)} and model: '{request.llm_model_name}' from client IP: {client_ip}; input text: {request.text}")
     request_time = datetime.utcnow()
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
@@ -432,23 +436,33 @@ async def get_token_level_embeddings_matrix_and_combined_feature_vector_for_stri
                 embedding_bundle = TokenLevelEmbeddingBundle(
                     input_text=request.text,
                     llm_model_name=request.llm_model_name,
+                    corpus_identifier_string=request.corpus_identifier_string,
                     ip_address=client_ip,
                     request_time=request_time
                 )
-                token_embeddings = await calculate_token_level_embeddings(request.text, request.llm_model_name, client_ip, embedding_bundle.id)
-                tokens = re.findall(r'\b\w+\b', request.text)
-                logger.info(f"Tokenized text into {len(tokens)} tokens. Organizing results.")
-                df = pd.DataFrame({
-                    'token': tokens,
-                    'embedding': [embedding.tolist() for embedding in token_embeddings]
-                })
-                json_content = df.to_json(orient=json_format or 'records')
-                response_time=datetime.utcnow()
+                word_list, token_embeddings = await calculate_token_level_embeddings(request.text, request.llm_model_name, request.corpus_identifier_string, client_ip)
+                lengths, max_length, min_length = analyze_token_embeddings(token_embeddings) 
+                logger.info(f"Split input text into {len(token_embeddings)} words/expressions. Organizing results.")
+                logger.info(f"LLM tokens per word of input text: {str([x for x in zip(word_list,lengths)])}")   
+                embedding_lengths = [len(embedding) for embeddings in token_embeddings for embedding in embeddings]
+                if len(set(embedding_lengths)) != 1:
+                    raise ValueError("Inconsistent embedding vector lengths found.")
+                df_data = [] # Create a DataFrame with 'word' column and separate columns for each embedding vector
+                for word_index, (word, embeddings) in enumerate(zip(word_list, token_embeddings)):
+                    for token_index, embedding in enumerate(embeddings):
+                        row = {
+                            'word_tokennum': f"{word}_{token_index}",
+                            'embedding': embedding.tolist()
+                        }
+                        df_data.append(row)
+                token_level_embeddings_df = pd.DataFrame(df_data)
+                json_content = token_level_embeddings_df.to_json(orient=json_format or 'records')
+                response_time = datetime.utcnow()
                 total_time = (response_time - request_time).total_seconds()
                 embedding_bundle.token_level_embeddings_bundle_json = json_content
                 embedding_bundle.response_time = response_time
                 embedding_bundle.total_time = total_time
-                combined_feature_vector = await get_or_compute_token_level_embedding_bundle_combined_feature_vector(embedding_bundle.id, json_content)        
+                combined_feature_vector = await get_or_compute_token_level_embedding_bundle_combined_feature_vector(embedding_bundle.id, token_level_embeddings_df)        
                 response_content = {
                     'input_text': request.text,
                     'token_level_embedding_bundle': json.loads(embedding_bundle.token_level_embeddings_bundle_json),
@@ -514,6 +528,8 @@ The request must contain the following attributes:
 }
 ```""")
 async def compute_similarity_between_strings(request: SimilarityRequest, req: Request, token: str = None) -> SimilarityResponse:
+    request.text1 = prepare_string_for_embedding(request.text1)
+    request.text1 = prepare_string_for_embedding(request.text2)
     logger.info(f"Received request: {request}")
     request_time = datetime.utcnow()
     similarity_measure = request.similarity_measure.lower()
@@ -572,10 +588,9 @@ async def compute_similarity_between_strings(request: SimilarityRequest, req: Re
         description="""Find the most similar strings in the database to the given input "query" text. This endpoint uses a pre-computed FAISS index to quickly search for the closest matching strings.
 
 ### Parameters:
-- `request`: A JSON object containing the query text, model name, and an optional number of most semantically similar strings to return.
+- `request`: A JSON object containing the query text, model name, an optional corpus identifier string to restrict the search to a specific corpus, and an optional number of most semantically similar strings to return.
 - `req`: HTTP request object (internal use).
 - `token`: Security token (optional).
-- `corpus_identifier_string`: An optional string identifier to restrict the search to a specific corpus.
 
 ### Request JSON Format:
 The request must contain the following attributes:
@@ -589,12 +604,12 @@ The request must contain the following attributes:
     "query_text": "Find me the most similar string!",
     "llm_model_name": "bge-m3-q8_0",
     "number_of_most_similar_strings_to_return": 5,
-    "corpus_identifier_string": "specific_corpus"
+    "corpus_identifier_string": "pastel_related_documentation_corpus"
 }
 ```
 
 ### Response:
-The response will include the most similar strings found in the database, along with the similarity scores.
+The response will include the most similar strings found in the database, along with the similarity scores and the corpus identifier string used for the search.
 
 ### Example Response:
 ```json
@@ -610,22 +625,25 @@ The response will include the most similar strings found in the database, along 
         response_description="A JSON object containing the query text along with the most similar strings and similarity scores.")
 async def search_stored_embeddings_with_query_string_for_semantic_similarity(request: SemanticSearchRequest, req: Request, token: str = None) -> SemanticSearchResponse:
     global faiss_indexes, token_faiss_indexes, associated_texts_by_model
-    unique_id = f"semantic_search_{request.query_text}_{request.llm_model_name}_{request.number_of_most_similar_strings_to_return}"  # Unique ID for this operation
+    request.query_text = prepare_string_for_embedding(request.query_text)
+    unique_id = f"semantic_search_{request.query_text}_{request.llm_model_name}_{request.corpus_identifier_string}_{request.number_of_most_similar_strings_to_return}"  # Unique ID for this operation
     lock = await shared_resources.lock_manager.lock(unique_id)        
     if lock.valid:
-        try:                
+        try:
+            if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
+                raise HTTPException(status_code=403, detail="Unauthorized")                            
             faiss_indexes, token_faiss_indexes, associated_texts_by_model = await build_faiss_indexes(force_rebuild=True)
             request_time = datetime.utcnow()
             llm_model_name = request.llm_model_name
             num_results = request.number_of_most_similar_strings_to_return
+            num_results_before_corpus_filter = num_results*100
             total_entries = len(associated_texts_by_model[llm_model_name])  # Get the total number of entries for the model
             num_results = min(num_results, total_entries)  # Ensure num_results doesn't exceed the total number of entries
-            logger.info(f"Received request to find {num_results} most similar strings for query text: `{request.query_text}` using model: {llm_model_name}")
-            if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
-                raise HTTPException(status_code=403, detail="Unauthorized")
+            num_results_before_corpus_filter = min(num_results_before_corpus_filter, total_entries)  # Ensure num_results_before_corpus_filter doesn't exceed the total number of entries
+            logger.info(f"Received request to find {num_results} most similar strings for query text: `{request.query_text}` using model: {llm_model_name} and corpus: {request.corpus_identifier_string}")
             try:
                 logger.info(f"Computing embedding for input text: {request.query_text}")
-                embedding_request = EmbeddingRequest(text=request.query_text, llm_model_name=request.llm_model_name)
+                embedding_request = EmbeddingRequest(text=request.query_text, llm_model_name=request.llm_model_name, corpus_identifier_string=request.corpus_identifier_string)
                 embedding_response = await get_embedding_vector_for_string(embedding_request, req)
                 input_embedding = np.array(embedding_response["embedding"]).astype('float32').reshape(1, -1)
                 faiss.normalize_L2(input_embedding)  # Normalize the input vector for cosine similarity
@@ -634,18 +652,17 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
                 if faiss_index is None:
                     raise HTTPException(status_code=400, detail=f"No FAISS index found for model: {llm_model_name}")
                 logger.info("Searching for the most similar string in the FAISS index")
-                if request.corpus_identifier_string:
-                    associated_texts_by_model = await get_texts_for_corpus_identifier(request.corpus_identifier_string)
-                else:
-                    associated_texts_by_model = await get_texts_for_model(llm_model_name)
-                similarities, indices = faiss_index.search(input_embedding.reshape(1, -1), num_results)  # Search for num_results similar strings
+                similarities, indices = faiss_index.search(input_embedding.reshape(1, -1), num_results_before_corpus_filter)  # Search for num_results similar strings
                 results = []  # Create an empty list to store the results
-                for ii in range(num_results):
+                for ii in range(num_results_before_corpus_filter):
                     index = indices[0][ii]
-                    if index < len(associated_texts_by_model[llm_model_name]):
+                    associated_texts_by_model_for_llm = associated_texts_by_model[llm_model_name]
+                    list_of_corpus_identifier_strings = await get_list_of_corpus_identifiers_from_list_of_embedding_texts(associated_texts_by_model_for_llm, llm_model_name)
+                    if index < len(associated_texts_by_model_for_llm):
                         similarity = float(similarities[0][ii])  # Convert numpy.float32 to native float
-                        most_similar_text = associated_texts_by_model[llm_model_name][index]
-                        if most_similar_text != request.query_text:  # Don't return the query text as a result
+                        most_similar_text = associated_texts_by_model_for_llm[index]
+                        corpus_identifier_string = list_of_corpus_identifier_strings[index]
+                        if (corpus_identifier_string == request.corpus_identifier_string) and (most_similar_text != request.query_text) and (len(results) <= num_results):
                             results.append({"search_result_text": most_similar_text, "similarity_to_query_text": similarity})
                     else:
                         logger.warning(f"Index {index} out of range for model {llm_model_name}")
@@ -653,7 +670,7 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
                 total_time = (response_time - request_time).total_seconds()
                 logger.info(f"Finished searching for the most similar string in the FAISS index in {total_time} seconds. Found {len(results)} results, returning the top {num_results}.")
                 logger.info(f"Found most similar strings for query string {request.query_text}: {results}")
-                return {"query_text": request.query_text, "results": results}  # Return the response matching the SemanticSearchResponse model
+                return {"query_text": request.query_text, "corpus_identifier_string": request.corpus_identifier_string,"results": results}  # Return the response matching the SemanticSearchResponse model
             except Exception as e:
                 logger.error(f"An error occurred while processing the request: {e}")
                 logger.error(traceback.format_exc())  # Print the traceback
@@ -671,15 +688,15 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
         description="""Perform an advanced semantic search by first using FAISS and cosine similarity to narrow down the most similar strings in the database, and then applying additional similarity measures for finer comparison.
 
 ### Parameters:
-- `request`: A JSON object containing the query text, model name, an optional similarity filter percentage, and an optional number of most similar strings to return.
+- `request`: A JSON object containing the query text, model name, an optional corpus identifier string to restrict the search to a specific corpus, an optional similarity filter percentage, and an optional number of most similar strings to return.
 - `req`: HTTP request object (internal use).
 - `token`: Security token (optional).
-- `corpus_identifier_string`: An optional string identifier to restrict the search to a specific corpus.
 
 ### Request JSON Format:
 The request must contain the following attributes:
 - `query_text`: The input text for which to find the most similar string.
 - `llm_model_name`: The model used to calculate embeddings.
+- `corpus_identifier_string`: An optional string identifier to restrict the search to a specific corpus.
 - `similarity_filter_percentage`: (Optional) The percentage of embeddings to filter based on cosine similarity, defaults to 0.02 (i.e., top 2%).
 - `number_of_most_similar_strings_to_return`: (Optional) The number of most similar strings to return after applying the second similarity measure, defaults to 10.
 
@@ -688,9 +705,9 @@ The request must contain the following attributes:
 {
     "query_text": "Find me the most similar string!",
     "llm_model_name": "bge-m3-q8_0",
+    "corpus_identifier_string": "specific_corpus"
     "similarity_filter_percentage": 0.02,
     "number_of_most_similar_strings_to_return": 5,
-    "corpus_identifier_string": "specific_corpus"
 }
 ```
 
@@ -711,18 +728,20 @@ The response will include the most similar strings found in the database, along 
         response_description="A JSON object containing the query text and the most similar strings, along with their similarity scores for multiple measures.")
 async def advanced_search_stored_embeddings_with_query_string_for_semantic_similarity(request: AdvancedSemanticSearchRequest, req: Request, token: str = None) -> AdvancedSemanticSearchResponse:
     global faiss_indexes, token_faiss_indexes, associated_texts_by_model
+    request.query_text = prepare_string_for_embedding(request.query_text)   
     unique_id = f"advanced_semantic_search_{request.query_text}_{request.llm_model_name}_{request.similarity_filter_percentage}_{request.number_of_most_similar_strings_to_return}"
     lock = await shared_resources.lock_manager.lock(unique_id)        
     if lock.valid:
         try:                
+            if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
+                raise HTTPException(status_code=403, detail="Unauthorized")
             faiss_indexes, token_faiss_indexes, associated_texts_by_model = await build_faiss_indexes(force_rebuild=True)
             request_time = datetime.utcnow()
             llm_model_name = request.llm_model_name
-            total_entries = len(associated_texts_by_model[llm_model_name])
-            num_results = max([1, int((1 - request.similarity_filter_percentage) * total_entries)])
+            num_results = max([1, int((1 - request.similarity_filter_percentage) * len(associated_texts_by_model[llm_model_name]))])
+            num_results_before_corpus_filter = request.number_of_most_similar_strings_to_return * 100
+            num_results_before_corpus_filter = min(num_results_before_corpus_filter, len(associated_texts_by_model[llm_model_name]))
             logger.info(f"Received request to find {num_results} most similar strings for query text: `{request.query_text}` using model: {llm_model_name}")
-            if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
-                raise HTTPException(status_code=403, detail="Unauthorized")
             try:
                 logger.info(f"Computing embedding for input text: {request.query_text}")
                 embedding_request = EmbeddingRequest(text=request.query_text, llm_model_name=llm_model_name)
@@ -733,11 +752,18 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
                 faiss_index = faiss_indexes.get(llm_model_name)
                 if faiss_index is None:
                     raise HTTPException(status_code=400, detail=f"No FAISS index found for model: {llm_model_name}")
-                _, indices = faiss_index.search(input_embedding, num_results)
+                similarities, indices = faiss_index.search(input_embedding, num_results_before_corpus_filter)
                 filtered_indices = indices[0]
                 similarity_results = []
+                associated_texts_by_model_for_llm = associated_texts_by_model[llm_model_name]
+                list_of_corpus_identifier_strings = await get_list_of_corpus_identifiers_from_list_of_embedding_texts(associated_texts_by_model_for_llm, llm_model_name)
                 for idx in filtered_indices:
-                    associated_text = associated_texts_by_model[llm_model_name][idx]
+                    if list_of_corpus_identifier_strings[idx] == request.corpus_identifier_string:
+                        associated_text = associated_texts_by_model_for_llm[idx]
+                        similarity_results.append((similarities[0][idx], associated_text))
+                similarity_results = sorted(similarity_results, key=lambda x: x[0], reverse=True)[:num_results]
+                final_results = []
+                for _, associated_text in similarity_results:
                     embedding_request = EmbeddingRequest(text=associated_text, llm_model_name=llm_model_name)
                     embedding_response = await get_embedding_vector_for_string(embedding_request, req)
                     filtered_embedding = np.array(embedding_response["embedding"])
@@ -748,16 +774,16 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
                     }
                     similarity_stats_str = fvs.py_compute_vector_similarity_stats(json.dumps(params))
                     similarity_stats_json = json.loads(similarity_stats_str)
-                    similarity_results.append({
+                    final_results.append({
                         "search_result_text": associated_text,
                         "similarity_to_query_text": similarity_stats_json
                     })
-                num_to_return = request.number_of_most_similar_strings_to_return if request.number_of_most_similar_strings_to_return is not None else len(similarity_results)
-                results = sorted(similarity_results, key=lambda x: x["similarity_to_query_text"]["hoeffding_d"], reverse=True)[:num_to_return]
+                num_to_return = request.number_of_most_similar_strings_to_return if request.number_of_most_similar_strings_to_return is not None else len(final_results)
+                results = sorted(final_results, key=lambda x: x["similarity_to_query_text"]["hoeffding_d"], reverse=True)[:num_to_return]
                 response_time = datetime.utcnow()
                 total_time = (response_time - request_time).total_seconds()
                 logger.info(f"Finished advanced search in {total_time} seconds. Found {len(results)} results.")
-                return {"query_text": request.query_text, "results": results}
+                return {"query_text": request.query_text, "corpus_identifier_string": request.corpus_identifier_string, "results": results}
             except Exception as e:
                 logger.error(f"An error occurred while processing the request: {e}")
                 raise HTTPException(status_code=500, detail="Internal Server Error")
@@ -778,10 +804,10 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
 - `hash`: SHA3-256 hash of the document file to verify integrity.
 - `size`: Size of the document file in bytes to verify completeness.
 - `llm_model_name`: The model used to calculate embeddings (optional).
+- `corpus_identifier_string`: An optional string identifier for grouping documents into a specific corpus.
 - `json_format`: The format of the JSON response (optional, see details below).
 - `send_back_json_or_zip_file`: Whether to return a JSON file or a ZIP file containing the embeddings file (optional, defaults to `zip`).
 - `token`: Security token (optional).
-- `corpus_identifier_string`: An optional string identifier for grouping documents into a specific corpus.
 
 ### JSON Format Options:
 The format of the JSON string returned by the endpoint (default is `records`; these are the options supported by the Pandas `to_json()` function):
@@ -804,8 +830,8 @@ async def get_all_embedding_vectors_for_document(
     hash: str = Form(None),
     size: int = Form(None),
     llm_model_name: str = "bge-m3-q8_0",
+    corpus_identifier_string: Optional[str] = "",
     json_format: str = 'records',
-    corpus_identifier_string: Optional[str] = None,
     token: str = None,
     send_back_json_or_zip_file: str = 'zip',
     req: Request = None
@@ -835,14 +861,13 @@ async def get_all_embedding_vectors_for_document(
     else:
         raise HTTPException(status_code=400, detail="Invalid input. Provide either a file or URL with hash and size.")
     try:
-        # Verify file integrity
         hash_obj = sha3_256()
         with open(temp_file_path, 'rb') as buffer:
             for chunk in iter(lambda: buffer.read(1024), b''):
                 hash_obj.update(chunk)
         file_hash = hash_obj.hexdigest()
         logger.info(f"SHA3-256 hash of submitted file: {file_hash}")
-        if corpus_identifier_string is None:
+        if corpus_identifier_string == "":
             corpus_identifier_string = file_hash
         unique_id = f"document_embedding_{file_hash}_{llm_model_name}"
         # Exponential backoff with jitter for acquiring lock
@@ -870,7 +895,7 @@ async def get_all_embedding_vectors_for_document(
                         input_data_binary = f.read()
                     result = magika.identify_bytes(input_data_binary)
                     mime_type = result.output.mime_type
-                    logger.info(f"Received request to extract embeddings for document with MIME type: {mime_type} and size: {os.path.getsize(temp_file_path)} bytes from IP address: {client_ip}")
+                    logger.info(f"Received request to extract embeddings for document with MIME type: {mime_type} and size: {os.path.getsize(temp_file_path):,} bytes from IP address: {client_ip}")
                     sentences = await parse_submitted_document_file_into_sentence_strings_func(temp_file_path, mime_type)
                     input_data = {
                         "sentences": sentences,
@@ -879,7 +904,7 @@ async def get_all_embedding_vectors_for_document(
                     }
                     context = start_resource_monitoring("get_all_embedding_vectors_for_document", input_data, client_ip)
                     try:
-                        results = await compute_embeddings_for_document(sentences, llm_model_name, client_ip, file_hash, corpus_identifier_string)
+                        results = await compute_embeddings_for_document(sentences, llm_model_name, corpus_identifier_string, client_ip, file_hash)
                     except Exception as e:
                         logger.error(f"Error while computing embeddings for document: {e}")
                         traceback.print_exc()
@@ -890,12 +915,12 @@ async def get_all_embedding_vectors_for_document(
                     json_content = df.to_json(orient=json_format or 'records').encode()
                     with open(temp_file_path, 'rb') as file_buffer:
                         original_file_content = file_buffer.read()
-                    await store_document_embeddings_in_db(file, file_hash, original_file_content, json_content, results, llm_model_name, client_ip, request_time, corpus_identifier_string)
+                    await store_document_embeddings_in_db(file, file_hash, original_file_content, json_content, results, llm_model_name, corpus_identifier_string, client_ip, request_time)
             overall_total_time = (datetime.utcnow() - request_time).total_seconds()
-            logger.info(f"Done getting all embeddings for document containing {len(sentences)} sentences with model {llm_model_name}")
+            logger.info(f"Done getting all embeddings for document containing {len(sentences)} sentences with model {llm_model_name} and corpus {corpus_identifier_string}")
             json_content_length = len(json_content)
             if json_content_length > 0:
-                logger.info(f"The response took {overall_total_time} seconds to generate, or {overall_total_time / (len(sentences) / 1000.0)} seconds per thousand input tokens and {overall_total_time / (float(json_content_length) / 1000000.0)} seconds per million output characters.")
+                logger.info(f"The response took {overall_total_time:,.2f} seconds to generate, or {overall_total_time / (len(sentences) / 1000.0):,.2f} seconds per thousand input tokens and {overall_total_time / (float(json_content_length) / 1000000.0):,.2f} seconds per million output characters.")
             if send_back_json_or_zip_file == 'json':
                 logger.info(f"Returning JSON response for document containing {len(sentences)} sentences with model {llm_model_name}; first 100 characters out of {json_content_length} total of JSON response: {json_content[:100]}")
                 return JSONResponse(content=json.loads(json_content.decode()))
@@ -1148,7 +1173,7 @@ async def compute_transcript_with_whisper_from_audio(
     size: int = Form(None),
     compute_embeddings_for_resulting_transcript_document: Optional[bool] = True,
     llm_model_name: Optional[str] = DEFAULT_MODEL_NAME,
-    corpus_identifier_string: Optional[str] = None,
+    corpus_identifier_string: Optional[str] = "",
     req: Request = None,
     token: str = None,
     client_ip: str = None
@@ -1308,7 +1333,6 @@ def show_logs_incremental(minutes: int, last_position: int):
 @app.get("/show_logs/{minutes}", response_class=HTMLResponse)
 def show_logs(minutes: int = 5):
     return show_logs_func(minutes)
-
 
 
         

@@ -21,6 +21,7 @@ python-multipart
 pytz
 redis
 ruff
+scipy
 sqlalchemy
 textract-py3
 uvicorn

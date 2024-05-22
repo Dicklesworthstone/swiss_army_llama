@@ -1,5 +1,4 @@
 from logger_config import setup_logger
-from database_functions import AsyncSessionLocal
 import socket
 import os
 import re
@@ -9,12 +8,11 @@ import redis
 import sys
 import threading
 import numpy as np
-import pandas as pd
 import faiss
-from io import StringIO
 from typing import Any
-from collections import defaultdict
+from database_functions import AsyncSessionLocal
 from sqlalchemy import text as sql_text
+from collections import defaultdict
 logger = setup_logger()
 
 class suppress_stdout_stderr(object):
@@ -133,53 +131,45 @@ async def build_faiss_indexes(force_rebuild=False):
         logger.info("Faiss indexes already built by another worker. Skipping.")
         return faiss_indexes, token_faiss_indexes, associated_texts_by_model
     faiss_indexes = {}
-    token_faiss_indexes = {}
-    associated_texts_by_model = defaultdict(list)
-    embeddings_by_model = defaultdict(list)
-    token_embeddings_by_model = defaultdict(list)
+    token_faiss_indexes = {} # Separate FAISS indexes for token-level embeddings
+    associated_texts_by_model = defaultdict(list)  # Create a dictionary to store associated texts by model name
     async with AsyncSessionLocal() as session:
-        result = await session.execute(sql_text("SELECT llm_model_name, text, embedding_json FROM embeddings"))
-        token_result = await session.execute(sql_text("SELECT llm_model_name, token, token_level_embedding_json FROM token_level_embeddings"))
-        for row in result.fetchall():
+        result = await session.execute(sql_text("SELECT llm_model_name, text, embedding_json FROM embeddings")) # Query regular embeddings
+        token_result = await session.execute(sql_text("SELECT llm_model_name, word, token_level_embedding_json FROM token_level_embeddings")) # Query token-level embeddings
+        embeddings_by_model = defaultdict(list)
+        token_embeddings_by_model = defaultdict(list)
+        for row in result.fetchall(): # Process regular embeddings
             llm_model_name = row[0]
-            associated_texts_by_model[llm_model_name].append(row[1])
+            associated_texts_by_model[llm_model_name].append(row[1])  # Store the associated text by model name
             embeddings_by_model[llm_model_name].append((row[1], json.loads(row[2])))
-        for row in token_result.fetchall():
+        for row in token_result.fetchall(): # Process token-level embeddings
             llm_model_name = row[0]
-            token_level_embedding_json = json.loads(row[2])
-            if isinstance(token_level_embedding_json, list):
-                if len(token_level_embedding_json) > 0 and all(isinstance(i, list) for i in token_level_embedding_json):
-                    combined_feature_vector = np.concatenate(token_level_embedding_json).tolist()
-                    token_embeddings_by_model[llm_model_name].append(combined_feature_vector)
-                else:
-                    token_embeddings_by_model[llm_model_name].append(token_level_embedding_json)
-            else:
-                logger.error(f"Unexpected format for token_level_embedding_json for model {llm_model_name}. Expected list.")
-    for llm_model_name, embeddings in embeddings_by_model.items():
-        logger.info(f"Building Faiss index over embeddings for model {llm_model_name}...")
-        embeddings_array = np.array([e[1] for e in embeddings]).astype('float32')
-        if embeddings_array.size == 0:
-            logger.error(f"No embeddings were loaded from the database for model {llm_model_name}, so nothing to build the Faiss index with!")
-            continue
-        logger.info(f"Loaded {len(embeddings_array)} embeddings for model {llm_model_name}.")
-        logger.info(f"Embedding dimension for model {llm_model_name}: {embeddings_array.shape[1]}")
-        logger.info(f"Normalizing {len(embeddings_array)} embeddings for model {llm_model_name}...")
-        faiss.normalize_L2(embeddings_array)
-        faiss_index = faiss.IndexFlatIP(embeddings_array.shape[1])
-        faiss_index.add(embeddings_array)
-        logger.info(f"Faiss index built for model {llm_model_name}.")
-        faiss_indexes[llm_model_name] = faiss_index
-    for llm_model_name, token_embeddings in token_embeddings_by_model.items():
-        token_embeddings_array = np.array(token_embeddings).astype('float32')
-        if token_embeddings_array.size == 0:
-            logger.error(f"No token-level embeddings were loaded from the database for model {llm_model_name}, so nothing to build the Faiss index with!")
-            continue
-        logger.info(f"Normalizing {len(token_embeddings_array)} token-level embeddings for model {llm_model_name}...")
-        faiss.normalize_L2(token_embeddings_array)
-        token_faiss_index = faiss.IndexFlatIP(token_embeddings_array.shape[1])
-        token_faiss_index.add(token_embeddings_array)
-        logger.info(f"Token-level Faiss index built for model {llm_model_name}.")
-        token_faiss_indexes[llm_model_name] = token_faiss_index
+            token_embeddings_by_model[llm_model_name].append(json.loads(row[2]))
+        for llm_model_name, embeddings in embeddings_by_model.items():
+            logger.info(f"Building Faiss index over embeddings for model {llm_model_name}...")
+            embeddings_array = np.array([e[1] for e in embeddings]).astype('float32')
+            if embeddings_array.size == 0:
+                logger.error(f"No embeddings were loaded from the database for model {llm_model_name}, so nothing to build the Faiss index with!")
+                continue
+            logger.info(f"Loaded {len(embeddings_array)} embeddings for model {llm_model_name}.")
+            logger.info(f"Embedding dimension for model {llm_model_name}: {embeddings_array.shape[1]}")
+            logger.info(f"Normalizing {len(embeddings_array)} embeddings for model {llm_model_name}...")
+            faiss.normalize_L2(embeddings_array)  # Normalize the vectors for cosine similarity
+            faiss_index = faiss.IndexFlatIP(embeddings_array.shape[1])  # Use IndexFlatIP for cosine similarity
+            faiss_index.add(embeddings_array)
+            logger.info(f"Faiss index built for model {llm_model_name}.")
+            faiss_indexes[llm_model_name] = faiss_index  # Store the index by model name
+        for llm_model_name, token_embeddings in token_embeddings_by_model.items():
+            token_embeddings_array = np.array(token_embeddings).astype('float32')
+            if token_embeddings_array.size == 0:
+                logger.error(f"No token-level embeddings were loaded from the database for model {llm_model_name}, so nothing to build the Faiss index with!")
+                continue
+            logger.info(f"Normalizing {len(token_embeddings_array)} token-level embeddings for model {llm_model_name}...")
+            faiss.normalize_L2(token_embeddings_array)  # Normalize the vectors for cosine similarity
+            token_faiss_index = faiss.IndexFlatIP(token_embeddings_array.shape[1])  # Use IndexFlatIP for cosine similarity
+            token_faiss_index.add(token_embeddings_array)
+            logger.info(f"Token-level Faiss index built for model {llm_model_name}.")
+            token_faiss_indexes[llm_model_name] = token_faiss_index  # Store the token-level index by model name
     os.environ["FAISS_SETUP_DONE"] = "1"
     logger.info("Faiss indexes built.")
     return faiss_indexes, token_faiss_indexes, associated_texts_by_model
@@ -187,6 +177,25 @@ async def build_faiss_indexes(force_rebuild=False):
 def normalize_logprobs(avg_logprob, min_logprob, max_logprob):
     range_logprob = max_logprob - min_logprob
     return (avg_logprob - min_logprob) / range_logprob if range_logprob != 0 else 0.5
+
+def truncate_string(s: str, max_length: int = 100) -> str:
+    return s[:max_length]
+
+def analyze_token_embeddings(token_embeddings):
+    lengths = [len(lst) for lst in token_embeddings]
+    max_length = max(lengths)
+    min_length = min(lengths)
+    return lengths, max_length, min_length
+
+def filter_shortest_lists(token_embeddings):
+    lengths, max_length, min_length = analyze_token_embeddings(token_embeddings)
+    shortest_lists = [lst for lst in token_embeddings if len(lst) == min_length]
+    return shortest_lists
+
+def filter_longest_lists(token_embeddings):
+    lengths, max_length, min_length = analyze_token_embeddings(token_embeddings)
+    longest_lists = [lst for lst in token_embeddings if len(lst) == max_length]
+    return longest_lists
 
 def remove_pagination_breaks(text: str) -> str:
     text = re.sub(r'-(\n)(?=[a-z])', '', text) # Remove hyphens at the end of lines when the word continues on the next line

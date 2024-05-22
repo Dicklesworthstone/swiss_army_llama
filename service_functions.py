@@ -1,7 +1,7 @@
 from logger_config import setup_logger
 import shared_resources
 from shared_resources import load_model, token_level_embedding_model_cache, text_completion_model_cache, is_gpu_available
-from database_functions import AsyncSessionLocal, DatabaseWriter, execute_with_retry
+from database_functions import AsyncSessionLocal, execute_with_retry
 from misc_utility_functions import clean_filename_for_url_func,  FakeUploadFile, sophisticated_sentence_splitter, merge_transcript_segments_into_combined_text, suppress_stdout_stderr
 from embeddings_data_models import TextEmbedding, DocumentEmbedding, Document, TokenLevelEmbedding, TokenLevelEmbeddingBundleCombinedFeatureVector, AudioTranscript
 from embeddings_data_models import EmbeddingRequest, TextCompletionRequest
@@ -18,12 +18,11 @@ import zipfile
 import tempfile
 import traceback
 import time
-from io import StringIO
 from datetime import datetime
 from hashlib import sha3_256
 from urllib.parse import quote
 import numpy as np
-import pandas as pd
+import scipy
 import textract
 from sqlalchemy import text as sql_text
 from sqlalchemy import select
@@ -58,172 +57,59 @@ RAMDISK_PATH = config("RAMDISK_PATH", default="/mnt/ramdisk", cast=str)
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 
     
-async def get_transcript_from_db(audio_file_hash: str):
-    return await execute_with_retry(_get_transcript_from_db, audio_file_hash)
-
-async def _get_transcript_from_db(audio_file_hash: str) -> Optional[dict]:
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            sql_text("SELECT * FROM audio_transcripts WHERE audio_file_hash=:audio_file_hash"),
-            {"audio_file_hash": audio_file_hash},
-        )
-        row = result.fetchone()
-        if row:
-            try:
-                segments_json = json.loads(row.segments_json)
-                combined_transcript_text_list_of_metadata_dicts = json.loads(row.combined_transcript_text_list_of_metadata_dicts)
-                info_json = json.loads(row.info_json)
-                if hasattr(info_json, '__dict__'):
-                    info_json = vars(info_json)
-            except json.JSONDecodeError as e:
-                raise ValueError(f"JSON Decode Error: {e}")
-            if not isinstance(segments_json, list) or not isinstance(combined_transcript_text_list_of_metadata_dicts, list) or not isinstance(info_json, dict):
-                logger.error(f"Type of segments_json: {type(segments_json)}, Value: {segments_json}")
-                logger.error(f"Type of combined_transcript_text_list_of_metadata_dicts: {type(combined_transcript_text_list_of_metadata_dicts)}, Value: {combined_transcript_text_list_of_metadata_dicts}")
-                logger.error(f"Type of info_json: {type(info_json)}, Value: {info_json}")
-                raise ValueError("Deserialized JSON does not match the expected format.")
-            audio_transcript_response = {
-                "id": row.id,
-                "audio_file_name": row.audio_file_name,
-                "audio_file_size_mb": row.audio_file_size_mb,
-                "segments_json": segments_json,
-                "combined_transcript_text": row.combined_transcript_text,
-                "combined_transcript_text_list_of_metadata_dicts": combined_transcript_text_list_of_metadata_dicts,
-                "info_json": info_json,
-                "ip_address": row.ip_address,
-                "request_time": row.request_time,
-                "response_time": row.response_time,
-                "total_time": row.total_time,
-                "url_to_download_zip_file_of_embeddings": ""
-            }
-            return AudioTranscriptResponse(**audio_transcript_response)
-        return None
-
-async def save_transcript_to_db(audio_file_hash, audio_file_name, audio_file_size_mb, transcript_segments, info, ip_address, request_time, response_time, total_time, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, corpus_identifier_string):
-    existing_transcript = await get_transcript_from_db(audio_file_hash)
-    if existing_transcript:
-        return existing_transcript
-    audio_transcript = AudioTranscript(
-        audio_file_hash=audio_file_hash,
-        audio_file_name=audio_file_name,
-        audio_file_size_mb=audio_file_size_mb,
-        segments_json=json.dumps(transcript_segments),
-        combined_transcript_text=combined_transcript_text,
-        combined_transcript_text_list_of_metadata_dicts=json.dumps(combined_transcript_text_list_of_metadata_dicts),
-        info_json=json.dumps(info),
-        ip_address=ip_address,
-        request_time=request_time,
-        response_time=response_time,
-        total_time=total_time,
-        corpus_identifier_string=corpus_identifier_string
-    )
-    await shared_resources.db_writer.enqueue_write([audio_transcript])
-
-async def compute_and_store_transcript_embeddings(audio_file_name, list_of_transcript_sentences, llm_model_name, ip_address, combined_transcript_text, req: Request):
-    logger.info(f"Now computing embeddings for entire transcript of {audio_file_name}...")
-    zip_dir = 'generated_transcript_embeddings_zip_files'
-    if not os.path.exists(zip_dir):
-        os.makedirs(zip_dir)
-    sanitized_file_name = clean_filename_for_url_func(audio_file_name)
-    document_name = f"automatic_whisper_transcript_of__{sanitized_file_name}"
-    file_hash = sha3_256(combined_transcript_text.encode('utf-8')).hexdigest()
-    computed_embeddings = await compute_embeddings_for_document(list_of_transcript_sentences, llm_model_name, ip_address, file_hash)
-    zip_file_path = f"{zip_dir}/{quote(document_name)}.zip"
-    with zipfile.ZipFile(zip_file_path, 'w') as zipf:
-        zipf.writestr("embeddings.txt", json.dumps(computed_embeddings))
-    download_url = f"download/{quote(document_name)}.zip"
-    full_download_url = f"{req.base_url}{download_url}"
-    logger.info(f"Generated download URL for transcript embeddings: {full_download_url}")
-    fake_upload_file = FakeUploadFile(filename=document_name, content=combined_transcript_text.encode(), content_type='text/plain')
-    logger.info(f"Storing transcript embeddings for {audio_file_name} in the database...")
-    await store_document_embeddings_in_db(fake_upload_file, file_hash, combined_transcript_text.encode(), json.dumps(computed_embeddings).encode(), computed_embeddings, llm_model_name, ip_address, datetime.utcnow())
-    return full_download_url
-
-async def compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio_file_path, audio_file_name, audio_file_size_mb, ip_address, req: Request, corpus_identifier_string: str, compute_embeddings_for_resulting_transcript_document=True, llm_model_name=DEFAULT_MODEL_NAME):
-    model_size = "large-v2"
-    logger.info(f"Loading Whisper model {model_size}...")
-    num_workers = 1 if psutil.virtual_memory().total < 32 * (1024 ** 3) else min(4, max(1, int((psutil.virtual_memory().total - 32 * (1024 ** 3)) / (4 * (1024 ** 3))))) # Only use more than 1 worker if there is at least 32GB of RAM; then use 1 worker per additional 4GB of RAM up to 4 workers max
-    model = await run_in_threadpool(WhisperModel, model_size, device="cpu", compute_type="auto", cpu_threads=os.cpu_count(), num_workers=num_workers)
-    request_time = datetime.utcnow()
-    logger.info(f"Computing transcript for {audio_file_name} which has a {audio_file_size_mb :.2f}MB file size...")
-    segments, info = await run_in_threadpool(model.transcribe, audio_file_path, beam_size=20)
-    if not segments:
-        logger.warning(f"No segments were returned for file {audio_file_name}.")
-        return [], {}, "", [], request_time, datetime.utcnow(), 0, ""    
-    segment_details = []
-    for idx, segment in enumerate(segments):
-        details = {
-            "start": round(segment.start, 2),
-            "end": round(segment.end, 2),
-            "text": segment.text,
-            "avg_logprob": round(segment.avg_logprob, 2)
-        }
-        logger.info(f"Details of transcript segment {idx} from file {audio_file_name}: {details}")
-        segment_details.append(details)
-    combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, list_of_transcript_sentences = merge_transcript_segments_into_combined_text(segment_details)    
-    if compute_embeddings_for_resulting_transcript_document:
-        download_url = await compute_and_store_transcript_embeddings(audio_file_name, list_of_transcript_sentences, llm_model_name, ip_address, combined_transcript_text, req, corpus_identifier_string)
-    else:
-        download_url = ''
-    response_time = datetime.utcnow()
-    total_time = (response_time - request_time).total_seconds()
-    logger.info(f"Transcript computed in {total_time} seconds.")
-    await save_transcript_to_db(audio_file_hash, audio_file_name, audio_file_size_mb, segment_details, info, ip_address, request_time, response_time, total_time, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, corpus_identifier_string)
-    info_dict = info._asdict()
-    return segment_details, info_dict, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, request_time, response_time, total_time, download_url
-    
-async def get_or_compute_transcript(file: UploadFile,
-                                    compute_embeddings_for_resulting_transcript_document: bool,
-                                    llm_model_name: str,
-                                    req: Request = None,
-                                    corpus_identifier_string: Optional[str] = None) -> dict:
-    request_time = datetime.utcnow()
-    ip_address = req.client.host if req else "127.0.0.1"
-    file_contents = await file.read()
-    audio_file_hash = sha3_256(file_contents).hexdigest()
-    file.file.seek(0)  # Reset file pointer after read
-    unique_id = f"transcript_{audio_file_hash}_{llm_model_name}"
-    lock = await shared_resources.lock_manager.lock(unique_id)    
-    if lock.valid:
-        try:            
-            existing_audio_transcript = await get_transcript_from_db(audio_file_hash)
-            if existing_audio_transcript:
-                return existing_audio_transcript
-            current_position = file.file.tell()
-            file.file.seek(0, os.SEEK_END)
-            audio_file_size_mb = file.file.tell() / (1024 * 1024)
-            file.file.seek(current_position)
-            with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-                shutil.copyfileobj(file.file, tmp_file)
-                audio_file_name = tmp_file.name
-            if corpus_identifier_string is None:
-                corpus_identifier_string = audio_file_hash
-            segment_details, info, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, request_time, response_time, total_time, download_url = await compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio_file_name, file.filename, audio_file_size_mb, ip_address, req, corpus_identifier_string, compute_embeddings_for_resulting_transcript_document, llm_model_name)
-            audio_transcript_response = {
-                "audio_file_hash": audio_file_hash,
-                "audio_file_name": file.filename,
-                "audio_file_size_mb": audio_file_size_mb,
-                "segments_json": segment_details,
-                "combined_transcript_text": combined_transcript_text,
-                "combined_transcript_text_list_of_metadata_dicts": combined_transcript_text_list_of_metadata_dicts,
-                "info_json": info,
-                "ip_address": ip_address,
-                "request_time": request_time,
-                "response_time": response_time,
-                "total_time": total_time,
-                "url_to_download_zip_file_of_embeddings": download_url if compute_embeddings_for_resulting_transcript_document else "",
-                "corpus_identifier_string": corpus_identifier_string
-            }
-            os.remove(audio_file_name)
-            return AudioTranscriptResponse(**audio_transcript_response)
-        finally:
-            await shared_resources.lock_manager.unlock(lock)    
-    else:
-        return {"status": "already processing"}               
-    
-    
 # Core embedding functions start here:    
+    
+def prepare_string_for_embedding(text: str) -> str:
+    # Normalize Unicode characters to NFKC form
+    text = unicodedata.normalize('NFKC', text)
+    # Define all possible newline and carriage return characters
+    newline_chars = [
+        '\r', '\n', '\r\n', '\u2028', '\u2029', '\v', '\f', 
+        '\x85', '\u000A', '\u000B', '\u000C', '\u000D', '\u0085',
+        '\u000D\u000A'
+    ]
+    # Replace all newline characters with a space
+    for nl in newline_chars:
+        text = text.replace(nl, ' ')
+    # Replace any sequence of whitespace characters (including non-breaking spaces) with a single space
+    text = re.sub(r'\s+', ' ', text)
+    # Remove leading and trailing whitespace
+    text = text.strip()
+    # Remove leading comma followed by whitespace if present
+    if text.startswith(', '):
+        text = text[2:].strip()
+    # Remove all control characters and non-printable characters
+    text = ''.join(ch for ch in text if unicodedata.category(ch)[0] != 'C')
+    # Ensure text is ASCII-encoded to catch any remaining unusual characters
+    text = text.encode('ascii', 'ignore').decode('ascii')
+    # Truncate to a maximum length of 2000 characters
+    if len(text) > 2000:
+        text = text[:2000]
+    # Eliminate all blank lines
+    text = ' '.join(line for line in text.splitlines() if line.strip() != '')
+    return text
 
+def extract_embeddings(input_data):
+    embeddings = []
+    for item in input_data['data']:
+        if isinstance(item['embedding'][0], list):  # Check if the first element is a list
+            for embedding_list in item['embedding']:
+                embeddings.extend(embedding_list)
+        else:  # Single list of floats
+            embeddings.extend(item['embedding'])
+    return embeddings
+
+def extract_embeddings_list(input_data):
+    embeddings_list = []
+    for item in input_data['data']:
+        if isinstance(item['embedding'][0], list):  # Check if the first element is a list
+            embeddings = []
+            for embedding_list in item['embedding']:
+                embeddings.extend(embedding_list)
+            embeddings_list.append(embeddings)
+        else:  # Single list of floats
+            embeddings_list.append(item['embedding'])
+    return embeddings_list
 
 def add_model_url(new_url: str) -> str:
     corrected_url = new_url
@@ -259,6 +145,42 @@ async def _get_embedding_from_db(text_hash: str, llm_model_name: str) -> Optiona
             return json.loads(embedding_json)
         return None
     
+async def get_corpus_identifier_from_embedding_text(text: str, llm_model_name: str):
+    text_hash = sha3_256(text.encode('utf-8')).hexdigest() # Compute the hash
+    return await execute_with_retry(_get_corpus_identifier_from_embedding_text, text_hash, llm_model_name)
+
+async def _get_corpus_identifier_from_embedding_text(text_hash: str, llm_model_name: str) -> Optional[str]:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            sql_text("SELECT corpus_identifier_string FROM embeddings WHERE text_hash=:text_hash AND llm_model_name=:llm_model_name"),
+            {"text_hash": text_hash, "llm_model_name": llm_model_name},
+        )
+        row = result.fetchone()
+        if row:
+            corpus_identifier_string = row[0]
+            return corpus_identifier_string
+        return None
+    
+async def get_list_of_corpus_identifiers_from_list_of_embedding_texts(list_of_texts: List[str], llm_model_name: str):
+    list_of_text_hashes = [sha3_256(text.encode('utf-8')).hexdigest() for text in list_of_texts]
+    return await execute_with_retry(_get_list_of_corpus_identifiers_from_list_of_embedding_texts, list_of_text_hashes, llm_model_name)
+
+async def _get_list_of_corpus_identifiers_from_list_of_embedding_texts(list_of_text_hashes: List[str], llm_model_name: str) -> List[str]:
+    async with AsyncSessionLocal() as session:
+        placeholders = ', '.join(f':hash{i}' for i in range(len(list_of_text_hashes)))
+        query = sql_text(f"""
+            SELECT corpus_identifier_string 
+            FROM embeddings 
+            WHERE text_hash IN ({placeholders}) 
+            AND llm_model_name = :llm_model_name
+        """)
+        params = {f'hash{i}': hash for i, hash in enumerate(list_of_text_hashes)}
+        params['llm_model_name'] = llm_model_name
+        result = await session.execute(query, params)
+        rows = result.fetchall()
+        corpus_identifiers = [row[0] for row in rows]
+        return corpus_identifiers
+    
 async def get_texts_for_corpus_identifier(corpus_identifier_string: str) -> Dict[str, List[str]]:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
@@ -289,51 +211,83 @@ async def get_texts_for_model(llm_model_name: str) -> Dict[str, List[str]]:
             )
     return texts_by_model
 
-async def get_or_compute_embedding(request: EmbeddingRequest, req: Request = None, client_ip: str = None, document_file_hash: str = None, corpus_identifier_string: str = None) -> dict:
-        request_time = datetime.utcnow()  # Capture request time as datetime object
-        prepared_request_text = prepare_string_for_embedding(request.text)
-        ip_address = client_ip or (req.client.host if req else "localhost") # If client_ip is provided, use it; otherwise, try to get from req; if not available, default to "localhost"
-        logger.info(f"Received request for embedding for '{prepared_request_text}' using model '{request.llm_model_name}' from IP address '{ip_address}'")
-        embedding_list = await get_embedding_from_db(prepared_request_text, request.llm_model_name) # Check if embedding exists in the database
-        if embedding_list is not None:
-            response_time = datetime.utcnow()  # Capture response time as datetime object
-            total_time = (response_time - request_time).total_seconds()  # Calculate time taken in seconds
-            logger.info(f"Embedding found in database for '{prepared_request_text}' using model '{request.llm_model_name}'; returning in {total_time:.4f} seconds")
-            return {"embedding": embedding_list}
-        model = load_model(request.llm_model_name)
-        embedding_list = await calculate_sentence_embedding(model, request.text) # Compute the embedding if not in the database
-        if embedding_list is None:
-            logger.error(f"Could not calculate the embedding for the given text: '{prepared_request_text}' using model '{request.llm_model_name}!'")
-            raise HTTPException(status_code=400, detail="Could not calculate the embedding for the given text")
-        embedding_json = json.dumps(embedding_list) # Serialize the list to JSON and save to the database
+async def get_or_compute_embedding(request: EmbeddingRequest, req: Request = None, client_ip: str = None, document_file_hash: str = None) -> dict:
+    request_time = datetime.utcnow()  # Capture request time as datetime object
+    ip_address = (
+        client_ip or (req.client.host if req else "localhost")
+    )  # If client_ip is provided, use it; otherwise, try to get from req; if not available, default to "localhost"
+    logger.info(
+        f"Received request for embedding for '{request.text}' using model '{request.llm_model_name}' from IP address '{ip_address}'"
+    )
+    embedding_list = await get_embedding_from_db(
+        request.text, request.llm_model_name
+    )  # Check if embedding exists in the database
+    if embedding_list is not None:
         response_time = datetime.utcnow()  # Capture response time as datetime object
-        total_time = (response_time - request_time).total_seconds() # Calculate total time using datetime objects
-        word_length_of_input_text = len(request.text.split())
-        if word_length_of_input_text > 0:
-            logger.info(f"Embedding calculated for '{prepared_request_text}' using model '{request.llm_model_name}' in {total_time} seconds, or an average of {total_time/word_length_of_input_text :.2f} seconds per word. Now saving to database...")
-        await save_embedding_to_db(prepared_request_text, request.llm_model_name, embedding_json, ip_address, request_time, response_time, total_time, document_file_hash)
+        total_time = (
+            response_time - request_time
+        ).total_seconds()  # Calculate time taken in seconds
+        logger.info(
+            f"Embedding found in database for '{request.text}' using model '{request.llm_model_name}'; returning in {total_time:.4f} seconds"
+        )
         return {"embedding": embedding_list}
+    model = load_model(request.llm_model_name)
+    embedding_list = await calculate_sentence_embedding(
+        model, request.text
+    )  # Compute the embedding if not in the database
+    if embedding_list is None:
+        logger.error(
+            f"Could not calculate the embedding for the given text: '{request.text}' using model '{request.llm_model_name}!'"
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Could not calculate the embedding for the given text",
+        )
+    embedding_json = json.dumps(
+        embedding_list
+    )  # Serialize the list to JSON and save to the database
+    response_time = datetime.utcnow()  # Capture response time as datetime object
+    total_time = (
+        response_time - request_time
+    ).total_seconds()  # Calculate total time using datetime objects
+    word_length_of_input_text = len(request.text.split())
+    if word_length_of_input_text > 0:
+        logger.info(
+            f"Embedding calculated for '{request.text}' using model '{request.llm_model_name}' in {total_time} seconds, or an average of {total_time/word_length_of_input_text :.2f} seconds per word. Now saving to database..."
+        )
+    await save_embedding_to_db(
+        text=request.text,
+        llm_model_name=request.llm_model_name,
+        corpus_identifier_string=request.corpus_identifier_string,
+        embedding_json=embedding_json,
+        ip_address=ip_address,
+        request_time=request_time,
+        response_time=response_time,
+        total_time=total_time,
+        document_file_hash=document_file_hash
+    )
+    return {"embedding": embedding_list}
 
-async def save_embedding_to_db(text: str, llm_model_name: str, embedding_json: str, ip_address: str, request_time: datetime, response_time: datetime, total_time: float, document_file_hash: str = None, corpus_identifier_string: str = None):
+async def save_embedding_to_db(text: str, llm_model_name: str,  corpus_identifier_string: str, embedding_json: str, ip_address: str, request_time: datetime, response_time: datetime, total_time: float, document_file_hash: str = None):
     existing_embedding = await get_embedding_from_db(text, llm_model_name) # Check if the embedding already exists
     if existing_embedding is not None:
         return existing_embedding
-    return await execute_with_retry(_save_embedding_to_db, text, llm_model_name, embedding_json, ip_address, request_time, response_time, total_time, document_file_hash, corpus_identifier_string)
+    return await execute_with_retry(_save_embedding_to_db, text, llm_model_name, corpus_identifier_string, embedding_json, ip_address, request_time, response_time, total_time, document_file_hash)
 
-async def _save_embedding_to_db(text: str, llm_model_name: str, embedding_json: str, ip_address: str, request_time: datetime, response_time: datetime, total_time: float, document_file_hash: str = None, corpus_identifier_string: str = None):
+async def _save_embedding_to_db(text: str, llm_model_name: str,  corpus_identifier_string: str, embedding_json: str, ip_address: str, request_time: datetime, response_time: datetime, total_time: float, document_file_hash: str = None):
     existing_embedding = await get_embedding_from_db(text, llm_model_name)
     if existing_embedding:
         return existing_embedding
     embedding = TextEmbedding(
         text=text,
         llm_model_name=llm_model_name,
+        corpus_identifier_string=corpus_identifier_string,
         embedding_json=embedding_json,
         ip_address=ip_address,
         request_time=request_time,
         response_time=response_time,
         total_time=total_time,
         document_file_hash=document_file_hash,
-        corpus_identifier_string=corpus_identifier_string
     )
     await shared_resources.db_writer.enqueue_write([embedding])  # Enqueue the write operation using the db_writer instance
     
@@ -359,72 +313,122 @@ def load_token_level_embedding_model(llm_model_name: str, raise_http_exception: 
         return model_instance
     except TypeError as e:
         logger.error(f"TypeError occurred while loading the model: {e}")
+        logger.error(traceback.format_exc())
         raise
     except Exception as e:
         logger.error(f"Exception occurred while loading the model: {e}")
-        traceback.print_exc()
+        logger.error(traceback.format_exc())
         if raise_http_exception:
             raise HTTPException(status_code=404, detail="Model file not found")
         else:
             raise FileNotFoundError(f"No model file found matching: {llm_model_name}")
 
-def normalize_embeddings(embeddings, target_length=None):
-    if target_length is None:
-        target_length = min([len(embedding) for embedding in embeddings])
-    normalized_embeddings = []
-    for embedding in embeddings:
-        if len(embedding) > target_length:
-            normalized_embedding = embedding[:target_length]
-        else:
-            padding = [0.0] * (target_length - len(embedding))
-            normalized_embedding = np.concatenate([embedding, padding])
-        normalized_embeddings.append(normalized_embedding)
-    return normalized_embeddings
+async def calculate_token_level_embeddings(text: str, llm_model_name: str, corpus_identifier_string: str, client_ip: str) -> List[List[np.array]]: 
+    text = prepare_string_for_embedding(text)
+    request_time = datetime.utcnow()
+    logger.info(f"Starting token-level embedding calculation for text: '{text}' using model: '{llm_model_name}'")
+    logger.info(f"Loading model: '{llm_model_name}'")
+    llm = load_token_level_embedding_model(llm_model_name)
+    word_list = text.split()
+    logger.info(f"Transformed input text into {len(word_list)} words/expressions")
+    async def fetch_existing_embeddings(word: str) -> Optional[List[np.array]]:
+        existing_embeddings = await get_token_level_embeddings_from_db(word, llm_model_name)
+        if existing_embeddings is not None:
+            logger.info(f"Embedding retrieved from database for word '{word}'")
+            return [np.array(embedding) for embedding in existing_embeddings]
+        return None
+    existing_embeddings = await asyncio.gather(*[fetch_existing_embeddings(word) for word in word_list])
+    missing_words = [word for word, embedding in zip(word_list, existing_embeddings) if embedding is None]
+    if missing_words:
+        logger.info(f"Computing embeddings for {len(missing_words)} missing words/expressions in batch")
+        try:
+            token_embeddings_object = llm.embed(missing_words)
+            token_embedding_map = {word: embeddings for word, embeddings in zip(missing_words, token_embeddings_object)}
+            for word, embedding_list in token_embedding_map.items():
+                response_time = datetime.utcnow()
+                token_level_embedding_json = json.dumps(embedding_list)
+                await store_token_level_embeddings_in_db(word, llm_model_name, token_level_embedding_json, client_ip, request_time, response_time, corpus_identifier_string)
+            for i, embedding in enumerate(existing_embeddings):
+                if embedding is None:
+                    existing_embeddings[i] = [np.array(embedding) for embedding in token_embedding_map[word_list[i]]]
+        except Exception as e:
+            logger.error(f"Exception occurred while computing embeddings: {e}")
+            logger.error(traceback.format_exc())
+            raise
+    logger.info(f"Completed token embedding calculation for all words in text: '{text}'")
+    return word_list, existing_embeddings
 
-async def compute_token_level_embedding_bundle_combined_feature_vector(token_level_embeddings) -> List[float]:
+async def get_token_level_embeddings_from_db(word: str, llm_model_name: str) -> Optional[List[List[float]]]:
+    word_hash = sha3_256(word.encode('utf-8')).hexdigest()  # Compute the hash
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            sql_text("SELECT token_level_embedding_json FROM token_level_embeddings WHERE word_hash=:word_hash AND llm_model_name=:llm_model_name"),
+            {"word_hash": word_hash, "llm_model_name": llm_model_name},
+        )
+        row = result.fetchone()
+        if row:
+            embedding_json = row[0]
+            logger.info(f"Embedding found in database for word hash '{word_hash}' using model '{llm_model_name}'")
+            return json.loads(embedding_json)
+        return None
+
+async def store_token_level_embeddings_in_db(word: str, llm_model_name: str, corpus_identifier_string: str, token_level_embedding_json: str, ip_address: str, request_time: datetime, response_time: datetime):
+    total_time = (response_time - request_time).total_seconds()
+    embedding = TokenLevelEmbedding(
+        word=word,
+        llm_model_name=llm_model_name,
+        corpus_identifier_string=corpus_identifier_string,
+        token_level_embedding_json=token_level_embedding_json,
+        ip_address=ip_address,
+        request_time=request_time,
+        response_time=response_time,
+        total_time=total_time
+    )
+    await shared_resources.db_writer.enqueue_write([embedding])
+
+async def compute_token_level_embedding_bundle_combined_feature_vector(token_level_embeddings_df) -> List[float]:
     start_time = datetime.utcnow()
-    logger.info("Extracting token-level embeddings from the bundle")
-    if not isinstance(token_level_embeddings, str):
-        raise ValueError("token_level_embeddings must be a JSON string")
-    parsed_df = pd.read_json(StringIO(token_level_embeddings))
-    token_level_embeddings_list = list(parsed_df['embedding'])
+    token_level_embeddings_list = token_level_embeddings_df['embedding'].tolist()
     logger.info(f"token_level_embeddings_list length: {len(token_level_embeddings_list)}")
-    embedding_shapes = [np.shape(embedding) for embedding in token_level_embeddings_list]
-    logger.info(f"Embedding shapes: {embedding_shapes}")
-    target_length = min([len(embedding) for embedding in token_level_embeddings_list])
-    normalized_embeddings = normalize_embeddings([np.array(embedding) for embedding in token_level_embeddings_list], target_length)
-    embeddings = np.array(normalized_embeddings)
-    logger.info(f"Normalized embeddings shape: {embeddings.shape}")
-    logger.info(f"Computing column-wise means/mins/maxes/std_devs of the embeddings... (shape: {embeddings.shape})")
-    assert(len(embeddings) > 0)
+    # Check if all embedding vectors have the same length
+    embedding_lengths = [len(embedding) for embedding in token_level_embeddings_list]
+    if len(set(embedding_lengths)) != 1:
+        raise ValueError("Inconsistent embedding vector lengths found.")
+    embeddings = np.array(token_level_embeddings_list)
+    logger.info(f"Embeddings shape: {embeddings.shape}")
+    logger.info(f"Computing column-wise means/mins/maxes/std_devs/kurtosis of the embeddings... (shape: {embeddings.shape})")
+    assert len(embeddings) > 0
+    # Compute summary statistics across the embeddings
     means = np.mean(embeddings, axis=0)
     mins = np.min(embeddings, axis=0)
     maxes = np.max(embeddings, axis=0)
     stds = np.std(embeddings, axis=0)
+    kurtoses = scipy.stats.kurtosis(embeddings, axis=0)
     logger.info("Concatenating the computed statistics to form the combined feature vector")
-    combined_feature_vector = np.concatenate([means, mins, maxes, stds])
+    combined_feature_vector = np.concatenate([means, mins, maxes, stds, kurtoses])
     flattened_vector = combined_feature_vector.flatten()  # Ensure the vector is 1D
     end_time = datetime.utcnow()
     total_time = (end_time - start_time).total_seconds()
     logger.info(f"Computed the token-level embedding bundle's combined feature vector in {total_time:.2f} seconds.")
     return flattened_vector.tolist()
 
-async def get_or_compute_token_level_embedding_bundle_combined_feature_vector(token_level_embedding_bundle_id, token_level_embeddings) -> List[float]:
+async def get_or_compute_token_level_embedding_bundle_combined_feature_vector(token_level_embedding_bundle_id, token_level_embeddings_df) -> List[float]:
     request_time = datetime.utcnow()
     logger.info(f"Checking for existing combined feature vector for token-level embedding bundle ID: {token_level_embedding_bundle_id}")
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(TokenLevelEmbeddingBundleCombinedFeatureVector)
-            .filter(TokenLevelEmbeddingBundleCombinedFeatureVector.token_level_embedding_bundle_id == token_level_embedding_bundle_id)
-        )
-        existing_combined_feature_vector = result.scalar_one_or_none()
-        if existing_combined_feature_vector:
-            response_time = datetime.utcnow()
-            total_time = (response_time - request_time).total_seconds()
-            logger.info(f"Found existing combined feature vector for token-level embedding bundle ID: {token_level_embedding_bundle_id}. Returning cached result in {total_time:.2f} seconds.")
-            return json.loads(existing_combined_feature_vector.combined_feature_vector_json)
+    if token_level_embedding_bundle_id is not None:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(TokenLevelEmbeddingBundleCombinedFeatureVector)
+                .filter(TokenLevelEmbeddingBundleCombinedFeatureVector.token_level_embedding_bundle_id == token_level_embedding_bundle_id)
+            )
+            existing_combined_feature_vector = result.scalar_one_or_none()
+            if existing_combined_feature_vector:
+                response_time = datetime.utcnow()
+                total_time = (response_time - request_time).total_seconds()
+                logger.info(f"Found existing combined feature vector for token-level embedding bundle ID: {token_level_embedding_bundle_id}. Returning cached result in {total_time:.2f} seconds.")
+                return json.loads(existing_combined_feature_vector.combined_feature_vector_json)
     logger.info(f"No cached combined feature_vector found for token-level embedding bundle ID: {token_level_embedding_bundle_id}. Computing now...")
-    combined_feature_vector = await compute_token_level_embedding_bundle_combined_feature_vector(token_level_embeddings)
+    combined_feature_vector = await compute_token_level_embedding_bundle_combined_feature_vector(token_level_embeddings_df)
     combined_feature_vector_db_object = TokenLevelEmbeddingBundleCombinedFeatureVector(
         token_level_embedding_bundle_id=token_level_embedding_bundle_id,
         combined_feature_vector_json=json.dumps(combined_feature_vector)
@@ -432,135 +436,6 @@ async def get_or_compute_token_level_embedding_bundle_combined_feature_vector(to
     logger.info(f"Writing combined feature vector for database write for token-level embedding bundle ID: {token_level_embedding_bundle_id} to the database...")
     await shared_resources.db_writer.enqueue_write([combined_feature_vector_db_object])
     return combined_feature_vector
-
-def extract_embeddings_token_level(input_data):
-    embeddings_list = []
-    for item in input_data:
-        if isinstance(item[0], list):  # Check if the first element is a list
-            embeddings = []
-            for embedding_list in item:
-                embeddings.extend(embedding_list)
-            embeddings_list.append(embeddings)
-        else:  # Single list of floats
-            embeddings_list.append(item)
-    return embeddings_list
-
-async def calculate_token_level_embeddings(text: str, llm_model_name: str, client_ip: str, token_level_embedding_bundle_id: int) -> List[np.array]:
-    text = prepare_string_for_embedding(text)
-    request_time = datetime.utcnow()
-    logger.info(f"Starting token-level embedding calculation for text: '{text}' using model: '{llm_model_name}'")
-    logger.info(f"Loading model: '{llm_model_name}'")
-    llm = load_token_level_embedding_model(llm_model_name)
-    tokens = text.split()
-    logger.info(f"Tokenized text into {len(tokens)} tokens")
-    # Check for existing embeddings in the database
-    async def fetch_existing_embeddings(token: str) -> Optional[np.array]:
-        existing_embedding = await get_token_level_embedding_from_db(token, llm_model_name)
-        if existing_embedding is not None:
-            logger.info(f"Embedding retrieved from database for token '{token}'")
-            return np.array(existing_embedding)
-        return None
-    existing_embeddings = await asyncio.gather(*[fetch_existing_embeddings(token) for token in tokens])
-    missing_tokens = [token for token, embedding in zip(tokens, existing_embeddings) if embedding is None]
-    # Compute missing embeddings in batch
-    if missing_tokens:
-        logger.info(f"Computing embeddings for {len(missing_tokens)} missing tokens in batch")
-        try:
-            token_embeddings_object = llm.embed(missing_tokens)
-            token_embeddings_vectors = extract_embeddings_token_level(token_embeddings_object)
-            for token, embedding_array in zip(missing_tokens, token_embeddings_vectors):
-                response_time = datetime.utcnow()
-                token_level_embedding_json = json.dumps(embedding_array)
-                await store_token_level_embeddings_in_db(token, llm_model_name, token_level_embedding_json, client_ip, request_time, response_time, token_level_embedding_bundle_id)
-            # Update existing embeddings with newly computed embeddings
-            for i, embedding in enumerate(existing_embeddings):
-                if embedding is None:
-                    existing_embeddings[i] = np.array(token_embeddings_vectors.pop(0))
-        except Exception as e:
-            logger.error(f"Exception occurred while computing embeddings: {e}")
-            raise
-    logger.info(f"Completed token embedding calculation for all tokens in text: '{text}'")
-    return existing_embeddings
-
-async def get_token_level_embedding_from_db(token: str, llm_model_name: str) -> Optional[List[float]]:
-    token_hash = sha3_256(token.encode('utf-8')).hexdigest()  # Compute the hash
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            sql_text("SELECT token_level_embedding_json FROM token_level_embeddings WHERE token_hash=:token_hash AND llm_model_name=:llm_model_name"),
-            {"token_hash": token_hash, "llm_model_name": llm_model_name},
-        )
-        row = result.fetchone()
-        if row:
-            embedding_json = row[0]
-            logger.info(f"Embedding found in database for token hash '{token_hash}' using model '{llm_model_name}'")
-            return json.loads(embedding_json)
-        return None
-
-async def store_token_level_embeddings_in_db(token: str, llm_model_name: str, token_level_embedding_json: str, ip_address: str, request_time: datetime, response_time: datetime, token_level_embedding_bundle_id: int):
-    total_time = (response_time - request_time).total_seconds()
-    embedding = TokenLevelEmbedding(
-        token=token,
-        llm_model_name=llm_model_name,
-        token_level_embedding_json=token_level_embedding_json,
-        ip_address=ip_address,
-        request_time=request_time,
-        response_time=response_time,
-        total_time=total_time,
-        token_level_embedding_bundle_id=token_level_embedding_bundle_id
-    )
-    await shared_resources.db_writer.enqueue_write([embedding])  # Enqueue the write operation for the token-level embedding
-        
-def extract_embeddings(input_data):
-    embeddings = []
-    for item in input_data['data']:
-        if isinstance(item['embedding'][0], list):  # Check if the first element is a list
-            for embedding_list in item['embedding']:
-                embeddings.extend(embedding_list)
-        else:  # Single list of floats
-            embeddings.extend(item['embedding'])
-    return embeddings
-
-def extract_embeddings_list(input_data):
-    embeddings_list = []
-    for item in input_data['data']:
-        if isinstance(item['embedding'][0], list):  # Check if the first element is a list
-            embeddings = []
-            for embedding_list in item['embedding']:
-                embeddings.extend(embedding_list)
-            embeddings_list.append(embeddings)
-        else:  # Single list of floats
-            embeddings_list.append(item['embedding'])
-    return embeddings_list
-
-def prepare_string_for_embedding(text: str) -> str:
-    # Normalize Unicode characters to NFKC form
-    text = unicodedata.normalize('NFKC', text)
-    # Define all possible newline and carriage return characters
-    newline_chars = [
-        '\r', '\n', '\r\n', '\u2028', '\u2029', '\v', '\f', 
-        '\x85', '\u000A', '\u000B', '\u000C', '\u000D', '\u0085',
-        '\u000D\u000A'
-    ]
-    # Replace all newline characters with a space
-    for nl in newline_chars:
-        text = text.replace(nl, ' ')
-    # Replace any sequence of whitespace characters (including non-breaking spaces) with a single space
-    text = re.sub(r'\s+', ' ', text)
-    # Remove leading and trailing whitespace
-    text = text.strip()
-    # Remove leading comma followed by whitespace if present
-    if text.startswith(', '):
-        text = text[2:].strip()
-    # Remove all control characters and non-printable characters
-    text = ''.join(ch for ch in text if unicodedata.category(ch)[0] != 'C')
-    # Ensure text is ASCII-encoded to catch any remaining unusual characters
-    text = text.encode('ascii', 'ignore').decode('ascii')
-    # Truncate to a maximum length of 2000 characters
-    if len(text) > 2000:
-        text = text[:2000]
-    # Eliminate all blank lines
-    text = ' '.join(line for line in text.splitlines() if line.strip() != '')
-    return text
 
 async def calculate_sentence_embedding(llama, text: str) -> np.array:
     sentence_embedding_vector = None
@@ -574,9 +449,11 @@ async def calculate_sentence_embedding(llama, text: str) -> np.array:
             sentence_embedding_vector = extract_embeddings(sentence_embedding_object)
         except TypeError as e:
             logger.error(f"TypeError in calculate_sentence_embedding: {e}")
+            logger.error(traceback.format_exc())
             raise
         except Exception as e:
             logger.error(f"Exception in calculate_sentence_embedding: {e}")
+            logger.error(traceback.format_exc())
             text = text[:-int(len(text) * 0.1)]
             retry_count += 1
             logger.info(f"Trimming sentence due to too many tokens. New length: {len(text)}")
@@ -596,9 +473,11 @@ async def calculate_sentence_embeddings_list(llama, texts: list) -> list:
             sentence_embeddings_vectors = extract_embeddings_list(sentence_embeddings_object)
         except TypeError as e:
             logger.error(f"TypeError in calculate_sentence_embeddings_list: {e}")
+            logger.error(traceback.format_exc())
             raise
         except Exception as e:
             logger.error(f"Exception in calculate_sentence_embeddings_list: {e}")
+            logger.error(traceback.format_exc())
             texts = [text[:-int(len(text) * 0.1)] for text in texts]
             retry_count += 1
             logger.info(f"Trimming sentences due to too many tokens. New lengths: {[len(text) for text in texts]}")
@@ -606,7 +485,7 @@ async def calculate_sentence_embeddings_list(llama, texts: list) -> list:
         logger.error("Failed to calculate sentence embeddings after multiple attempts")
     return sentence_embeddings_vectors
 
-async def compute_embeddings_for_document(strings: list, llm_model_name: str, client_ip: str, document_file_hash: str, corpus_identifier_string: str) -> List[Tuple[str, np.array]]:
+async def compute_embeddings_for_document(strings: list, llm_model_name: str, corpus_identifier_string: str, client_ip: str, document_file_hash: str) -> List[Tuple[str, np.array]]:
     results = []
     strings = [prepare_string_for_embedding(text) for text in strings]    
     if USE_PARALLEL_INFERENCE_QUEUE:
@@ -624,11 +503,22 @@ async def compute_embeddings_for_document(strings: list, llm_model_name: str, cl
                         request_time = datetime.utcnow()
                         response_time = datetime.utcnow()
                         total_time = (response_time - request_time).total_seconds()
-                        await save_embedding_to_db(text, llm_model_name, embedding_json, client_ip, request_time, response_time, total_time, document_file_hash, corpus_identifier_string)
+                        await save_embedding_to_db(
+                            text=text,
+                            llm_model_name=llm_model_name,
+                            corpus_identifier_string=corpus_identifier_string,
+                            embedding_json=embedding_json,
+                            ip_address=client_ip,
+                            request_time=request_time,
+                            response_time=response_time,
+                            total_time=total_time,
+                            document_file_hash=document_file_hash,
+                        )                        
                         batch_results.append((text, embedding))
                     return batch_results
             except Exception as e:
                 logger.error(f"Error computing embeddings for batch: {e}")
+                logger.error(traceback.format_exc())                
                 return [(text, None) for text in batch]
         batch_size = MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS
         batches = [strings[i:i + batch_size] for i in range(0, len(strings), batch_size)]
@@ -650,7 +540,17 @@ async def compute_embeddings_for_document(strings: list, llm_model_name: str, cl
             request_time = datetime.utcnow()
             response_time = datetime.utcnow()
             total_time = (response_time - request_time).total_seconds()
-            await save_embedding_to_db(prepared_text, llm_model_name, embedding_json, client_ip, request_time, response_time, total_time, document_file_hash)
+            await save_embedding_to_db(
+                text=prepared_text,
+                llm_model_name=llm_model_name,
+                corpus_identifier_string=corpus_identifier_string,
+                embedding_json=embedding_json,
+                ip_address=client_ip,
+                request_time=request_time,
+                response_time=response_time,
+                total_time=total_time,
+                document_file_hash=document_file_hash
+            )
             results.append((text, embedding))
         end_time = time.perf_counter()
         duration = end_time - start_time
@@ -674,6 +574,7 @@ async def compute_embeddings_for_document_old(strings: list, llm_model_name: str
                     return text, embedding["embedding"]
             except Exception as e:
                 logger.error(f"Error computing embedding for text '{text}': {e}")
+                logger.error(traceback.format_exc())            
                 return text, None
         results = await asyncio.gather(*[compute_embedding(s) for s in strings])  # Use asyncio.gather to run the tasks concurrently
         end_time = time.perf_counter()  # Record the end time
@@ -701,7 +602,7 @@ async def parse_submitted_document_file_into_sentence_strings_func(temp_file_pat
         content = content.decode('utf-8')
     except Exception as e:
         logger.error(f"Error while processing file: {e}, mime_type: {mime_type}")
-        traceback.print_exc()
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=400, detail=f"Unsupported file type or error: {e}")
     sentences = sophisticated_sentence_splitter(content)
     if len(sentences) == 0 and temp_file_path.lower().endswith('.pdf'):
@@ -712,12 +613,11 @@ async def parse_submitted_document_file_into_sentence_strings_func(temp_file_pat
             sentences = sophisticated_sentence_splitter(content)
         except Exception as e:
             logger.error(f"Error while processing file with OCR: {e}")
-            traceback.print_exc()
+            logger.error(traceback.format_exc())
             raise HTTPException(status_code=400, detail="OCR failed: {e}")
     if len(sentences) == 0:
         logger.info("No sentences found in the document")
         raise HTTPException(status_code=400, detail="No sentences found in the document")
-    logger.info(f"Extracted {len(sentences)} sentences from the document")
     strings = [s.strip() for s in sentences if len(s.strip()) > MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING]
     return strings
 
@@ -732,9 +632,10 @@ async def store_document_embeddings_in_db(file: File,
                                         json_content: bytes,
                                         results: List[Tuple[str, np.array]],
                                         llm_model_name: str,
+                                        corpus_identifier_string: str,                                        
                                         client_ip: str,
                                         request_time: datetime,
-                                        corpus_identifier_string: str):
+                                        ):
     document = await _get_document_from_db(file_hash)  # First, check if a Document with the same hash already exists
     if not document:  # If not, create a new Document object
         document = Document(document_hash=file_hash, llm_model_name=llm_model_name, corpus_identifier_string=corpus_identifier_string)
@@ -743,8 +644,8 @@ async def store_document_embeddings_in_db(file: File,
         filename=file.filename,
         mimetype=file.content_type,
         file_hash=file_hash,
-        corpus_identifier_string=corpus_identifier_string,
         llm_model_name=llm_model_name,
+        corpus_identifier_string=corpus_identifier_string,
         file_data=original_file_content,
         document_embedding_results_json=json.loads(json_content.decode()),
         ip_address=client_ip,
@@ -763,13 +664,13 @@ async def store_document_embeddings_in_db(file: File,
             embedding_entry = TextEmbedding(
                 text=text,
                 llm_model_name=llm_model_name,
+                corpus_identifier_string=corpus_identifier_string,
                 embedding_json=json.dumps(embedding),
                 ip_address=client_ip,
                 request_time=request_time,
                 response_time=datetime.utcnow(),
                 total_time=(datetime.utcnow() - request_time).total_seconds(),
-                document_file_hash=file_hash,  # Link it to the DocumentEmbedding via file_hash
-                corpus_identifier_string=corpus_identifier_string
+                document_file_hash=file_hash  # Link it to the DocumentEmbedding via file_hash
             )
         else:
             write_operations.append(embedding_entry)
@@ -797,10 +698,11 @@ def load_text_completion_model(llm_model_name: str, raise_http_exception: bool =
         return model_instance
     except TypeError as e:
         logger.error(f"TypeError occurred while loading the model: {e}")
+        logger.error(traceback.format_exc())        
         raise
     except Exception as e:
         logger.error(f"Exception occurred while loading the model: {e}")
-        traceback.print_exc()
+        logger.error(traceback.format_exc())
         if raise_http_exception:
             raise HTTPException(status_code=404, detail="Model file not found")
         else:
@@ -923,6 +825,172 @@ async def download_file(url: str, expected_size: int, expected_hash: str) -> str
         raise HTTPException(status_code=400, detail="File hash mismatch")
     return temp_file_path
 
+# Audio Transcript functions start here:
+
+async def get_transcript_from_db(audio_file_hash: str):
+    return await execute_with_retry(_get_transcript_from_db, audio_file_hash)
+
+async def _get_transcript_from_db(audio_file_hash: str) -> Optional[dict]:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            sql_text("SELECT * FROM audio_transcripts WHERE audio_file_hash=:audio_file_hash"),
+            {"audio_file_hash": audio_file_hash},
+        )
+        row = result.fetchone()
+        if row:
+            try:
+                segments_json = json.loads(row.segments_json)
+                combined_transcript_text_list_of_metadata_dicts = json.loads(row.combined_transcript_text_list_of_metadata_dicts)
+                info_json = json.loads(row.info_json)
+                if hasattr(info_json, '__dict__'):
+                    info_json = vars(info_json)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"JSON Decode Error: {e}")
+            if not isinstance(segments_json, list) or not isinstance(combined_transcript_text_list_of_metadata_dicts, list) or not isinstance(info_json, dict):
+                logger.error(f"Type of segments_json: {type(segments_json)}, Value: {segments_json}")
+                logger.error(f"Type of combined_transcript_text_list_of_metadata_dicts: {type(combined_transcript_text_list_of_metadata_dicts)}, Value: {combined_transcript_text_list_of_metadata_dicts}")
+                logger.error(f"Type of info_json: {type(info_json)}, Value: {info_json}")
+                raise ValueError("Deserialized JSON does not match the expected format.")
+            audio_transcript_response = {
+                "id": row.id,
+                "audio_file_name": row.audio_file_name,
+                "audio_file_size_mb": row.audio_file_size_mb,
+                "segments_json": segments_json,
+                "combined_transcript_text": row.combined_transcript_text,
+                "combined_transcript_text_list_of_metadata_dicts": combined_transcript_text_list_of_metadata_dicts,
+                "info_json": info_json,
+                "ip_address": row.ip_address,
+                "request_time": row.request_time,
+                "response_time": row.response_time,
+                "total_time": row.total_time,
+                "url_to_download_zip_file_of_embeddings": ""
+            }
+            return AudioTranscriptResponse(**audio_transcript_response)
+        return None
+
+async def save_transcript_to_db(audio_file_hash, audio_file_name, audio_file_size_mb, transcript_segments, info, ip_address, request_time, response_time, total_time, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, corpus_identifier_string):
+    existing_transcript = await get_transcript_from_db(audio_file_hash)
+    if existing_transcript:
+        return existing_transcript
+    audio_transcript = AudioTranscript(
+        audio_file_hash=audio_file_hash,
+        audio_file_name=audio_file_name,
+        audio_file_size_mb=audio_file_size_mb,
+        segments_json=json.dumps(transcript_segments),
+        combined_transcript_text=combined_transcript_text,
+        combined_transcript_text_list_of_metadata_dicts=json.dumps(combined_transcript_text_list_of_metadata_dicts),
+        info_json=json.dumps(info),
+        ip_address=ip_address,
+        request_time=request_time,
+        response_time=response_time,
+        total_time=total_time,
+        corpus_identifier_string=corpus_identifier_string
+    )
+    await shared_resources.db_writer.enqueue_write([audio_transcript])
+
+async def compute_and_store_transcript_embeddings(audio_file_name, list_of_transcript_sentences, llm_model_name, corpus_identifier_string, ip_address, combined_transcript_text, req: Request):
+    logger.info(f"Now computing embeddings for entire transcript of {audio_file_name}...")
+    zip_dir = 'generated_transcript_embeddings_zip_files'
+    if not os.path.exists(zip_dir):
+        os.makedirs(zip_dir)
+    sanitized_file_name = clean_filename_for_url_func(audio_file_name)
+    document_name = f"automatic_whisper_transcript_of__{sanitized_file_name}"
+    file_hash = sha3_256(combined_transcript_text.encode('utf-8')).hexdigest()
+    computed_embeddings = await compute_embeddings_for_document(list_of_transcript_sentences, llm_model_name, ip_address, file_hash)
+    zip_file_path = f"{zip_dir}/{quote(document_name)}.zip"
+    with zipfile.ZipFile(zip_file_path, 'w') as zipf:
+        zipf.writestr("embeddings.txt", json.dumps(computed_embeddings))
+    download_url = f"download/{quote(document_name)}.zip"
+    full_download_url = f"{req.base_url}{download_url}"
+    logger.info(f"Generated download URL for transcript embeddings: {full_download_url}")
+    fake_upload_file = FakeUploadFile(filename=document_name, content=combined_transcript_text.encode(), content_type='text/plain')
+    logger.info(f"Storing transcript embeddings for {audio_file_name} in the database...")
+    await store_document_embeddings_in_db(fake_upload_file, file_hash, combined_transcript_text.encode(), json.dumps(computed_embeddings).encode(), computed_embeddings, llm_model_name, corpus_identifier_string, ip_address, datetime.utcnow())
+    return full_download_url
+
+async def compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio_file_path, audio_file_name, audio_file_size_mb, ip_address, req: Request, corpus_identifier_string: str, compute_embeddings_for_resulting_transcript_document=True, llm_model_name=DEFAULT_MODEL_NAME):
+    model_size = "large-v2"
+    logger.info(f"Loading Whisper model {model_size}...")
+    num_workers = 1 if psutil.virtual_memory().total < 32 * (1024 ** 3) else min(4, max(1, int((psutil.virtual_memory().total - 32 * (1024 ** 3)) / (4 * (1024 ** 3))))) # Only use more than 1 worker if there is at least 32GB of RAM; then use 1 worker per additional 4GB of RAM up to 4 workers max
+    model = await run_in_threadpool(WhisperModel, model_size, device="cpu", compute_type="auto", cpu_threads=os.cpu_count(), num_workers=num_workers)
+    request_time = datetime.utcnow()
+    logger.info(f"Computing transcript for {audio_file_name} which has a {audio_file_size_mb :.2f}MB file size...")
+    segments, info = await run_in_threadpool(model.transcribe, audio_file_path, beam_size=20)
+    if not segments:
+        logger.warning(f"No segments were returned for file {audio_file_name}.")
+        return [], {}, "", [], request_time, datetime.utcnow(), 0, ""    
+    segment_details = []
+    for idx, segment in enumerate(segments):
+        details = {
+            "start": round(segment.start, 2),
+            "end": round(segment.end, 2),
+            "text": segment.text,
+            "avg_logprob": round(segment.avg_logprob, 2)
+        }
+        logger.info(f"Details of transcript segment {idx} from file {audio_file_name}: {details}")
+        segment_details.append(details)
+    combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, list_of_transcript_sentences = merge_transcript_segments_into_combined_text(segment_details)    
+    if compute_embeddings_for_resulting_transcript_document:
+        download_url = await compute_and_store_transcript_embeddings(audio_file_name, list_of_transcript_sentences, llm_model_name, corpus_identifier_string, ip_address, combined_transcript_text, req)
+    else:
+        download_url = ''
+    response_time = datetime.utcnow()
+    total_time = (response_time - request_time).total_seconds()
+    logger.info(f"Transcript computed in {total_time} seconds.")
+    await save_transcript_to_db(audio_file_hash, audio_file_name, audio_file_size_mb, segment_details, info, ip_address, request_time, response_time, total_time, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, corpus_identifier_string)
+    info_dict = info._asdict()
+    return segment_details, info_dict, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, request_time, response_time, total_time, download_url
+    
+async def get_or_compute_transcript(file: UploadFile,
+                                    compute_embeddings_for_resulting_transcript_document: bool,
+                                    llm_model_name: str,
+                                    corpus_identifier_string: str,
+                                    req: Request = None
+                                    ) -> dict:
+    request_time = datetime.utcnow()
+    ip_address = req.client.host if req else "127.0.0.1"
+    file_contents = await file.read()
+    audio_file_hash = sha3_256(file_contents).hexdigest()
+    file.file.seek(0)  # Reset file pointer after read
+    unique_id = f"transcript_{audio_file_hash}_{llm_model_name}"
+    lock = await shared_resources.lock_manager.lock(unique_id)    
+    if lock.valid:
+        try:            
+            existing_audio_transcript = await get_transcript_from_db(audio_file_hash)
+            if existing_audio_transcript:
+                return existing_audio_transcript
+            current_position = file.file.tell()
+            file.file.seek(0, os.SEEK_END)
+            audio_file_size_mb = file.file.tell() / (1024 * 1024)
+            file.file.seek(current_position)
+            with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                shutil.copyfileobj(file.file, tmp_file)
+                audio_file_name = tmp_file.name
+            if corpus_identifier_string == "":
+                corpus_identifier_string = audio_file_hash
+            segment_details, info, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, request_time, response_time, total_time, download_url = await compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio_file_name, file.filename, audio_file_size_mb, ip_address, req, corpus_identifier_string, compute_embeddings_for_resulting_transcript_document, llm_model_name)
+            audio_transcript_response = {
+                "audio_file_hash": audio_file_hash,
+                "audio_file_name": file.filename,
+                "audio_file_size_mb": audio_file_size_mb,
+                "segments_json": segment_details,
+                "combined_transcript_text": combined_transcript_text,
+                "combined_transcript_text_list_of_metadata_dicts": combined_transcript_text_list_of_metadata_dicts,
+                "info_json": info,
+                "ip_address": ip_address,
+                "request_time": request_time,
+                "response_time": response_time,
+                "total_time": total_time,
+                "url_to_download_zip_file_of_embeddings": download_url if compute_embeddings_for_resulting_transcript_document else "",
+                "corpus_identifier_string": corpus_identifier_string
+            }
+            os.remove(audio_file_name)
+            return AudioTranscriptResponse(**audio_transcript_response)
+        finally:
+            await shared_resources.lock_manager.unlock(lock)    
+    else:
+        return {"status": "already processing"}               
+
 def get_audio_duration_seconds(file_path: str) -> float:
     audio = MutagenFile(file_path)
     if audio is None or not hasattr(audio.info, 'length'):
@@ -1030,4 +1098,5 @@ def end_resource_monitoring(context: Dict[str, Any]):
             log_file.write(json.dumps(result) + "\n")
     except Exception as e:
         logger.error(f"Failed to write resource monitoring log: {e}")
+        logger.error(traceback.format_exc())
     logger.info(f"Request data and system resources used: {result}")

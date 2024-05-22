@@ -122,6 +122,7 @@ python-multipart
 pytz
 redis
 ruff
+scipy
 sqlalchemy
 textract-py3
 uvicorn
@@ -273,8 +274,8 @@ The application uses a SQLite database via SQLAlchemy ORM. Here are the data mod
 ### TokenLevelEmbedding Table
 
 - `id`: Primary Key
-- `token`: Token for which the embedding was computed
-- `token_hash`: Hash of the token, computed using SHA3-256
+- `word`: Word for which the embedding was computed
+- `word_hash`: Hash of the token, computed using SHA3-256
 - `llm_model_name`: Model used to compute the embedding
 - `token_level_embedding_json`: The computed token-level embedding in JSON format
 
