@@ -135,15 +135,11 @@ async def build_faiss_indexes(force_rebuild=False):
     faiss_indexes = {}
     token_faiss_indexes = {}
     associated_texts_by_model = defaultdict(list)
+    embeddings_by_model = defaultdict(list)
+    token_embeddings_by_model = defaultdict(list)
     async with AsyncSessionLocal() as session:
         result = await session.execute(sql_text("SELECT llm_model_name, text, embedding_json FROM embeddings"))
         token_result = await session.execute(sql_text("SELECT llm_model_name, token, token_level_embedding_json FROM token_level_embeddings"))
-        embeddings_by_model = defaultdict(list)
-        token_embeddings_by_model = defaultdict(list)
-        for row in result.fetchall():
-            llm_model_name = row[0]
-            associated_texts_by_model[llm_model_name].append(row[1])
-            embeddings_by_model[llm_model_name].append((row[1], json.loads(row[2])))
         for row in result.fetchall():
             llm_model_name = row[0]
             associated_texts_by_model[llm_model_name].append(row[1])
@@ -152,35 +148,38 @@ async def build_faiss_indexes(force_rebuild=False):
             llm_model_name = row[0]
             token_level_embedding_json = json.loads(row[2])
             if isinstance(token_level_embedding_json, list):
-                combined_feature_vector = np.concatenate(token_level_embedding_json).tolist()
-                token_embeddings_by_model[llm_model_name].append(combined_feature_vector)
+                if len(token_level_embedding_json) > 0 and all(isinstance(i, list) for i in token_level_embedding_json):
+                    combined_feature_vector = np.concatenate(token_level_embedding_json).tolist()
+                    token_embeddings_by_model[llm_model_name].append(combined_feature_vector)
+                else:
+                    token_embeddings_by_model[llm_model_name].append(token_level_embedding_json)
             else:
                 logger.error(f"Unexpected format for token_level_embedding_json for model {llm_model_name}. Expected list.")
-        for llm_model_name, embeddings in embeddings_by_model.items():
-            logger.info(f"Building Faiss index over embeddings for model {llm_model_name}...")
-            embeddings_array = np.array([e[1] for e in embeddings]).astype('float32')
-            if embeddings_array.size == 0:
-                logger.error(f"No embeddings were loaded from the database for model {llm_model_name}, so nothing to build the Faiss index with!")
-                continue
-            logger.info(f"Loaded {len(embeddings_array)} embeddings for model {llm_model_name}.")
-            logger.info(f"Embedding dimension for model {llm_model_name}: {embeddings_array.shape[1]}")
-            logger.info(f"Normalizing {len(embeddings_array)} embeddings for model {llm_model_name}...")
-            faiss.normalize_L2(embeddings_array)
-            faiss_index = faiss.IndexFlatIP(embeddings_array.shape[1])
-            faiss_index.add(embeddings_array)
-            logger.info(f"Faiss index built for model {llm_model_name}.")
-            faiss_indexes[llm_model_name] = faiss_index
-        for llm_model_name, token_embeddings in token_embeddings_by_model.items():
-            token_embeddings_array = np.array(token_embeddings).astype('float32')
-            if token_embeddings_array.size == 0:
-                logger.error(f"No token-level embeddings were loaded from the database for model {llm_model_name}, so nothing to build the Faiss index with!")
-                continue
-            logger.info(f"Normalizing {len(token_embeddings_array)} token-level embeddings for model {llm_model_name}...")
-            faiss.normalize_L2(token_embeddings_array)
-            token_faiss_index = faiss.IndexFlatIP(token_embeddings_array.shape[1])
-            token_faiss_index.add(token_embeddings_array)
-            logger.info(f"Token-level Faiss index built for model {llm_model_name}.")
-            token_faiss_indexes[llm_model_name] = token_faiss_index
+    for llm_model_name, embeddings in embeddings_by_model.items():
+        logger.info(f"Building Faiss index over embeddings for model {llm_model_name}...")
+        embeddings_array = np.array([e[1] for e in embeddings]).astype('float32')
+        if embeddings_array.size == 0:
+            logger.error(f"No embeddings were loaded from the database for model {llm_model_name}, so nothing to build the Faiss index with!")
+            continue
+        logger.info(f"Loaded {len(embeddings_array)} embeddings for model {llm_model_name}.")
+        logger.info(f"Embedding dimension for model {llm_model_name}: {embeddings_array.shape[1]}")
+        logger.info(f"Normalizing {len(embeddings_array)} embeddings for model {llm_model_name}...")
+        faiss.normalize_L2(embeddings_array)
+        faiss_index = faiss.IndexFlatIP(embeddings_array.shape[1])
+        faiss_index.add(embeddings_array)
+        logger.info(f"Faiss index built for model {llm_model_name}.")
+        faiss_indexes[llm_model_name] = faiss_index
+    for llm_model_name, token_embeddings in token_embeddings_by_model.items():
+        token_embeddings_array = np.array(token_embeddings).astype('float32')
+        if token_embeddings_array.size == 0:
+            logger.error(f"No token-level embeddings were loaded from the database for model {llm_model_name}, so nothing to build the Faiss index with!")
+            continue
+        logger.info(f"Normalizing {len(token_embeddings_array)} token-level embeddings for model {llm_model_name}...")
+        faiss.normalize_L2(token_embeddings_array)
+        token_faiss_index = faiss.IndexFlatIP(token_embeddings_array.shape[1])
+        token_faiss_index.add(token_embeddings_array)
+        logger.info(f"Token-level Faiss index built for model {llm_model_name}.")
+        token_faiss_indexes[llm_model_name] = token_faiss_index
     os.environ["FAISS_SETUP_DONE"] = "1"
     logger.info("Faiss indexes built.")
     return faiss_indexes, token_faiss_indexes, associated_texts_by_model

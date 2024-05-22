@@ -368,6 +368,19 @@ def load_token_level_embedding_model(llm_model_name: str, raise_http_exception: 
         else:
             raise FileNotFoundError(f"No model file found matching: {llm_model_name}")
 
+def normalize_embeddings(embeddings, target_length=None):
+    if target_length is None:
+        target_length = min([len(embedding) for embedding in embeddings])
+    normalized_embeddings = []
+    for embedding in embeddings:
+        if len(embedding) > target_length:
+            normalized_embedding = embedding[:target_length]
+        else:
+            padding = [0.0] * (target_length - len(embedding))
+            normalized_embedding = np.concatenate([embedding, padding])
+        normalized_embeddings.append(normalized_embedding)
+    return normalized_embeddings
+
 async def compute_token_level_embedding_bundle_combined_feature_vector(token_level_embeddings) -> List[float]:
     start_time = datetime.utcnow()
     logger.info("Extracting token-level embeddings from the bundle")
@@ -375,7 +388,13 @@ async def compute_token_level_embedding_bundle_combined_feature_vector(token_lev
         raise ValueError("token_level_embeddings must be a JSON string")
     parsed_df = pd.read_json(StringIO(token_level_embeddings))
     token_level_embeddings_list = list(parsed_df['embedding'])
-    embeddings = np.array(token_level_embeddings_list)
+    logger.info(f"token_level_embeddings_list length: {len(token_level_embeddings_list)}")
+    embedding_shapes = [np.shape(embedding) for embedding in token_level_embeddings_list]
+    logger.info(f"Embedding shapes: {embedding_shapes}")
+    target_length = min([len(embedding) for embedding in token_level_embeddings_list])
+    normalized_embeddings = normalize_embeddings([np.array(embedding) for embedding in token_level_embeddings_list], target_length)
+    embeddings = np.array(normalized_embeddings)
+    logger.info(f"Normalized embeddings shape: {embeddings.shape}")
     logger.info(f"Computing column-wise means/mins/maxes/std_devs of the embeddings... (shape: {embeddings.shape})")
     assert(len(embeddings) > 0)
     means = np.mean(embeddings, axis=0)
