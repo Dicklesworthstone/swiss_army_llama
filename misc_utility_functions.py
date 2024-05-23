@@ -1,5 +1,5 @@
 from logger_config import setup_logger
-from embeddings_data_models import TextEmbedding, TokenLevelEmbeddingBundleCombinedFeatureVector
+from embeddings_data_models import TextEmbedding, TokenLevelEmbeddingBundle, TokenLevelEmbeddingBundleCombinedFeatureVector
 import socket
 import os
 import re
@@ -12,7 +12,6 @@ import numpy as np
 import faiss
 from typing import Any
 from database_functions import AsyncSessionLocal
-from sqlalchemy import text as sql_text
 from sqlalchemy import select
 from collections import defaultdict
 logger = setup_logger()
@@ -134,11 +133,16 @@ async def build_faiss_indexes(force_rebuild=False):
     faiss_indexes = {}
     token_faiss_indexes = {} # Separate FAISS indexes for token-level embeddings
     associated_texts_by_model = defaultdict(list)  # Create a dictionary to store associated texts by model name
+    associated_token_level_embeddings_by_model = defaultdict(list)  # Create a dictionary to store associated token-level embeddings by model name
     async with AsyncSessionLocal() as session:
-        # result = await session.execute(sql_text("SELECT llm_model_name, text, embedding_json FROM embeddings")) # Query regular embeddings
-        # token_result = await session.execute(sql_text("SELECT llm_model_name, input_text, combined_feature_vector_json FROM token_level_embedding_bundle_combined_feature_vectors")) # Query token-level embeddings
         result = await session.execute(select(TextEmbedding.llm_model_name, TextEmbedding.text, TextEmbedding.embedding_json))
-        token_result = await session.execute(select(TokenLevelEmbeddingBundleCombinedFeatureVector.llm_model_name, TokenLevelEmbeddingBundleCombinedFeatureVector.combined_feature_vector_json, TokenLevelEmbeddingBundleCombinedFeatureVector.token_level_embedding_bundle))
+        token_result = await session.execute(
+            select(
+                TokenLevelEmbeddingBundleCombinedFeatureVector.llm_model_name,
+                TokenLevelEmbeddingBundleCombinedFeatureVector.combined_feature_vector_json,
+                TokenLevelEmbeddingBundleCombinedFeatureVector.token_level_embedding_bundle,
+            ).join(TokenLevelEmbeddingBundle)
+        )
         embeddings_by_model = defaultdict(list)
         token_embeddings_by_model = defaultdict(list)
         for row in result.fetchall(): # Process regular embeddings
@@ -147,6 +151,7 @@ async def build_faiss_indexes(force_rebuild=False):
             embeddings_by_model[llm_model_name].append((row[1], json.loads(row[2])))
         for row in token_result.fetchall(): # Process token-level embeddings
             llm_model_name = row[0]
+            associated_token_level_embeddings_by_model[llm_model_name].append(row[1])  # Store the associated token-level embeddings by model name
             token_embeddings_by_model[llm_model_name].append(json.loads(row[2]))
         for llm_model_name, embeddings in embeddings_by_model.items():
             logger.info(f"Building Faiss index over embeddings for model {llm_model_name}...")
@@ -168,7 +173,7 @@ async def build_faiss_indexes(force_rebuild=False):
             token_faiss_index.add(token_embeddings_combined_feature_vector)
             token_faiss_indexes[llm_model_name] = token_faiss_index  # Store the token-level index by model name
     os.environ["FAISS_SETUP_DONE"] = "1"
-    return faiss_indexes, token_faiss_indexes, associated_texts_by_model
+    return faiss_indexes, token_faiss_indexes, associated_texts_by_model, associated_token_level_embeddings_by_model
 
 def normalize_logprobs(avg_logprob, min_logprob, max_logprob):
     range_logprob = max_logprob - min_logprob

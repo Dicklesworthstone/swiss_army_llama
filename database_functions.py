@@ -1,4 +1,4 @@
-from embeddings_data_models import Base, TextEmbedding, DocumentEmbedding, Document, TokenLevelEmbedding, TokenLevelEmbeddingBundle, TokenLevelEmbeddingBundleCombinedFeatureVector, AudioTranscript
+from embeddings_data_models import Base, TextEmbedding, DocumentEmbedding, DocumentTokenLevelEmbedding, Document, TokenLevelEmbedding, TokenLevelEmbeddingBundle, TokenLevelEmbeddingBundleCombinedFeatureVector, AudioTranscript
 from logger_config import setup_logger
 import traceback
 import asyncio
@@ -36,6 +36,7 @@ class DatabaseWriter:
         attr_name = {
             TextEmbedding: 'text_hash',
             DocumentEmbedding: 'file_hash',
+            DocumentTokenLevelEmbedding: 'file_hash',
             Document: 'document_hash',
             TokenLevelEmbedding: 'word_hash',
             TokenLevelEmbeddingBundle: 'input_text_hash',
@@ -81,6 +82,7 @@ class DatabaseWriter:
         unique_constraint_msg = {
             TextEmbedding: "token_embeddings.text_hash, token_embeddings.llm_model_name",
             DocumentEmbedding: "document_embeddings.file_hash, document_embeddings.llm_model_name",
+            DocumentTokenLevelEmbedding: "document_token_level_embeddings.file_hash, document_token_level_embeddings.llm_model_name",
             Document: "documents.document_hash, documents.llm_model_name",
             TokenLevelEmbedding: "token_level_embeddings.word_hash, token_level_embeddings.llm_model_name",
             TokenLevelEmbeddingBundle: "token_level_embedding_bundles.input_text_hash, token_level_embedding_bundles.llm_model_name",

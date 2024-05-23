@@ -98,7 +98,7 @@ async def initialize_globals():
             load_model(llm_model_name, raise_http_exception=False)
         except FileNotFoundError as e:
             logger.error(e)
-    faiss_indexes, token_faiss_indexes, associated_texts_by_model = await build_faiss_indexes()
+    faiss_indexes, token_faiss_indexes, associated_texts_by_model, associated_token_level_embeddings_by_model = await build_faiss_indexes()
 
 
 # other shared variables and methods
