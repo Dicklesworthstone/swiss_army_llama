@@ -581,6 +581,10 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
             if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
                 raise HTTPException(status_code=403, detail="Unauthorized")
             faiss_indexes, associated_texts_by_model_and_pooling_method = await build_faiss_indexes(force_rebuild=True)
+            try:
+                faiss_index = faiss_indexes[(request.llm_model_name, request.embedding_pooling_method)]
+            except KeyError:
+                raise HTTPException(status_code=400, detail=f"No FAISS index found for model: {request.llm_model_name} and pooling method: {request.embedding_pooling_method}")            
             request_time = datetime.utcnow()
             llm_model_name = request.llm_model_name
             embedding_pooling_method = request.embedding_pooling_method
@@ -589,8 +593,10 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
             try:
                 logger.info(f"Computing embedding for input text: {request.query_text}")
                 embedding_request = EmbeddingRequest(text=request.query_text, llm_model_name=llm_model_name, embedding_pooling_method=embedding_pooling_method)
-                embedding_response = await get_or_compute_embedding(embedding_request, req)                   
-                input_embedding = np.array(embedding_response["embedding"]).astype('float32').reshape(1, -1)
+                embedding_response = await get_or_compute_embedding(embedding_request, req)                
+                embedding_json = embedding_response["text_embedding_dict"]["embedding_json"]
+                embedding_vector = json.loads(embedding_json)
+                input_embedding = np.array(embedding_vector).astype('float32').reshape(1, -1)                
                 faiss.normalize_L2(input_embedding)
                 logger.info(f"Computed embedding for input text: {request.query_text}")
                 final_results = []
@@ -611,11 +617,13 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
                 similarity_results = sorted(similarity_results, key=lambda x: x[0], reverse=True)[:num_results]
                 for _, associated_text in similarity_results:
                     embedding_request = EmbeddingRequest(text=associated_text, llm_model_name=llm_model_name, embedding_pooling_method=embedding_pooling_method)
-                    embedding_response = await get_or_compute_embedding(request=embedding_request, req=req, use_verbose=False)                       
-                    filtered_embedding = np.array(embedding_response["embedding"])
+                    embedding_response = await get_or_compute_embedding(request=embedding_request, req=req, use_verbose=False)           
+                    embedding_json = embedding_response["text_embedding_dict"]["embedding_json"]
+                    embedding_vector = json.loads(embedding_json)
+                    comparison__embedding = np.array(embedding_vector).astype('float32').reshape(1, -1)                 
                     params = {
                         "vector_1": input_embedding.tolist()[0],
-                        "vector_2": filtered_embedding.tolist(),
+                        "vector_2": comparison__embedding.tolist()[0],
                         "similarity_measure": "all"
                     }
                     similarity_stats_str = fvs.py_compute_vector_similarity_stats(json.dumps(params))

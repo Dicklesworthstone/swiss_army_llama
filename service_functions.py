@@ -296,23 +296,32 @@ async def calculate_sentence_embeddings_list(llama, texts: list, embedding_pooli
             means = np.mean(embeddings, axis=0)
             flattened_vector = means.flatten()
         elif embedding_pooling_method == "means_mins_maxes":
-            means = np.mean(embeddings, axis=0)
-            mins = np.min(embeddings, axis=0)
-            maxes = np.max(embeddings, axis=0)
-            combined_feature_vector = np.concatenate([means, mins, maxes]).flatten()
-            flattened_vector = combined_feature_vector.flatten()
+            if number_of_embeddings == 1:
+                flattened_vector = embeddings[0].flatten()
+            else:
+                means = np.mean(embeddings, axis=0)
+                mins = np.min(embeddings, axis=0)
+                maxes = np.max(embeddings, axis=0)
+                combined_feature_vector = np.concatenate([means, mins, maxes]).flatten()
+                flattened_vector = combined_feature_vector.flatten()
         elif embedding_pooling_method == "means_mins_maxes_stds_kurtoses":
-            means = np.mean(embeddings, axis=0)
-            mins = np.min(embeddings, axis=0)
-            maxes = np.max(embeddings, axis=0)
-            stds = np.std(embeddings, axis=0)
-            kurtoses = scipy.stats.kurtosis(embeddings, axis=0)
-            combined_feature_vector = np.concatenate([means, mins, maxes, stds, kurtoses])
-            flattened_vector = combined_feature_vector.flatten()
+            if number_of_embeddings == 1:
+                flattened_vector = embeddings[0].flatten()
+            else:            
+                means = np.mean(embeddings, axis=0)
+                mins = np.min(embeddings, axis=0)
+                maxes = np.max(embeddings, axis=0)
+                stds = np.std(embeddings, axis=0)
+                kurtoses = scipy.stats.kurtosis(embeddings, axis=0)
+                combined_feature_vector = np.concatenate([means, mins, maxes, stds, kurtoses])
+                flattened_vector = combined_feature_vector.flatten()
         elif embedding_pooling_method == "svd":
-            svd = TruncatedSVD(n_components=2)  # Set n_components to 2
-            svd_embeddings = svd.fit_transform(embeddings.T)
-            flattened_vector = svd_embeddings.flatten()
+            if number_of_embeddings == 1:
+                flattened_vector = embeddings[0].flatten()
+            else:            
+                svd = TruncatedSVD(n_components=2)  # Set n_components to 2
+                svd_embeddings = svd.fit_transform(embeddings.T)
+                flattened_vector = svd_embeddings.flatten()
         else:
             raise ValueError(f"Unknown embedding_pooling_method: {embedding_pooling_method}")
         combined_embedding = flattened_vector.tolist()
