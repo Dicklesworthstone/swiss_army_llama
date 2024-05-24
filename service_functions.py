@@ -591,46 +591,16 @@ async def download_file(url: str, expected_size: int, expected_hash: str) -> str
 
 # Audio Transcript functions start here:
 
-async def get_transcript_from_db(audio_file_hash: str):
+async def get_transcript_from_db(audio_file_hash: str) -> Optional[AudioTranscript]:
     return await execute_with_retry(_get_transcript_from_db, audio_file_hash)
 
-async def _get_transcript_from_db(audio_file_hash: str) -> Optional[dict]:
+async def _get_transcript_from_db(audio_file_hash: str) -> Optional[AudioTranscript]:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            sql_text("SELECT * FROM audio_transcripts WHERE audio_file_hash=:audio_file_hash"),
-            {"audio_file_hash": audio_file_hash},
+            select(AudioTranscript).filter(AudioTranscript.audio_file_hash == audio_file_hash)
         )
-        row = result.fetchone()
-        if row:
-            try:
-                segments_json = json.loads(row.segments_json)
-                combined_transcript_text_list_of_metadata_dicts = json.loads(row.combined_transcript_text_list_of_metadata_dicts)
-                info_json = json.loads(row.info_json)
-                if hasattr(info_json, '__dict__'):
-                    info_json = vars(info_json)
-            except json.JSONDecodeError as e:
-                raise ValueError(f"JSON Decode Error: {e}")
-            if not isinstance(segments_json, list) or not isinstance(combined_transcript_text_list_of_metadata_dicts, list) or not isinstance(info_json, dict):
-                logger.error(f"Type of segments_json: {type(segments_json)}, Value: {segments_json}")
-                logger.error(f"Type of combined_transcript_text_list_of_metadata_dicts: {type(combined_transcript_text_list_of_metadata_dicts)}, Value: {combined_transcript_text_list_of_metadata_dicts}")
-                logger.error(f"Type of info_json: {type(info_json)}, Value: {info_json}")
-                raise ValueError("Deserialized JSON does not match the expected format.")
-            audio_transcript_response = {
-                "id": row.id,
-                "audio_file_name": row.audio_file_name,
-                "audio_file_size_mb": row.audio_file_size_mb,
-                "segments_json": segments_json,
-                "combined_transcript_text": row.combined_transcript_text,
-                "combined_transcript_text_list_of_metadata_dicts": combined_transcript_text_list_of_metadata_dicts,
-                "info_json": info_json,
-                "ip_address": row.ip_address,
-                "request_time": row.request_time,
-                "response_time": row.response_time,
-                "total_time": row.total_time,
-                "url_to_download_zip_file_of_embeddings": ""
-            }
-            return AudioTranscriptResponse(**audio_transcript_response)
-        return None
+        transcript = result.scalars().first()
+        return transcript
 
 async def save_transcript_to_db(audio_file_hash, audio_file_name, audio_file_size_mb, transcript_segments, info, ip_address, request_time, response_time, total_time, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, corpus_identifier_string):
     audio_transcript = AudioTranscript(
@@ -649,7 +619,7 @@ async def save_transcript_to_db(audio_file_hash, audio_file_name, audio_file_siz
     )
     await shared_resources.db_writer.enqueue_write([audio_transcript])
 
-async def compute_and_store_transcript_embeddings(audio_file_name, list_of_transcript_sentences, llm_model_name, corpus_identifier_string, ip_address, combined_transcript_text, req: Request):
+async def compute_and_store_transcript_embeddings(audio_file_name: str, list_of_transcript_sentences: list, llm_model_name: str, embedding_pooling_method: str, corpus_identifier_string: str, ip_address: str, combined_transcript_text: str, req: Request):
     logger.info(f"Now computing embeddings for entire transcript of {audio_file_name}...")
     zip_dir = 'generated_transcript_embeddings_zip_files'
     if not os.path.exists(zip_dir):
@@ -657,7 +627,18 @@ async def compute_and_store_transcript_embeddings(audio_file_name, list_of_trans
     sanitized_file_name = clean_filename_for_url_func(audio_file_name)
     document_name = f"automatic_whisper_transcript_of__{sanitized_file_name}"
     file_hash = sha3_256(combined_transcript_text.encode('utf-8')).hexdigest()
-    computed_embeddings = await compute_embeddings_for_document(list_of_transcript_sentences, llm_model_name, ip_address, file_hash)
+    sentences = sophisticated_sentence_splitter(combined_transcript_text)
+    computed_embeddings = await compute_embeddings_for_document(
+        strings=list_of_transcript_sentences,
+        llm_model_name=llm_model_name,
+        embedding_pooling_method=embedding_pooling_method,
+        corpus_identifier_string=corpus_identifier_string,
+        client_ip=ip_address,
+        document_file_hash=file_hash,
+        file=None,
+        original_file_content=combined_transcript_text.encode(),
+        json_format="records",
+    )
     zip_file_path = f"{zip_dir}/{quote(document_name)}.zip"
     with zipfile.ZipFile(zip_file_path, 'w') as zipf:
         zipf.writestr("embeddings.txt", json.dumps(computed_embeddings))
@@ -666,7 +647,18 @@ async def compute_and_store_transcript_embeddings(audio_file_name, list_of_trans
     logger.info(f"Generated download URL for transcript embeddings: {full_download_url}")
     fake_upload_file = FakeUploadFile(filename=document_name, content=combined_transcript_text.encode(), content_type='text/plain')
     logger.info(f"Storing transcript embeddings for {audio_file_name} in the database...")
-    await store_document_embeddings_in_db(fake_upload_file, file_hash, combined_transcript_text.encode(), json.dumps(computed_embeddings).encode(), computed_embeddings, llm_model_name, corpus_identifier_string, ip_address, datetime.utcnow())
+    await store_document_embeddings_in_db(
+        file=fake_upload_file,
+        document_file_hash=file_hash,
+        original_file_content=combined_transcript_text.encode(),
+        strings=sentences,
+        json_content=json.dumps(computed_embeddings).encode(),
+        llm_model_name=llm_model_name,
+        embedding_pooling_method=embedding_pooling_method,
+        corpus_identifier_string=corpus_identifier_string,
+        client_ip=ip_address,
+        request_time=datetime.utcnow(),
+    )
     return full_download_url
 
 async def compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio_file_path, audio_file_name, audio_file_size_mb, ip_address, req: Request, corpus_identifier_string: str, compute_embeddings_for_resulting_transcript_document=True, llm_model_name=DEFAULT_MODEL_NAME):
@@ -705,6 +697,7 @@ async def compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio
 async def get_or_compute_transcript(file: UploadFile,
                                     compute_embeddings_for_resulting_transcript_document: bool,
                                     llm_model_name: str,
+                                    embedding_pooling_method: str,
                                     corpus_identifier_string: str,
                                     req: Request = None
                                     ) -> dict:

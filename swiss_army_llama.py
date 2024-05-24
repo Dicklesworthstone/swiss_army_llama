@@ -1009,6 +1009,7 @@ async def turn_pydantic_model_description_into_bnf_grammar_for_llm(
 - `size`: Size of the audio file in bytes to verify completeness.
 - `compute_embeddings_for_resulting_transcript_document`: Boolean to indicate if document embeddings should be computed (optional, defaults to True).
 - `llm_model_name`: The language model used for computing embeddings (optional, defaults to the default model name).
+- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'mean', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd'; default is 'mean').
 - `req`: HTTP Request object for additional request metadata (optional).
 - `token`: Security token for API access (optional).
 - `client_ip`: Client IP for logging and security (optional).
@@ -1032,6 +1033,7 @@ async def compute_transcript_with_whisper_from_audio(
     size: int = Form(None),
     compute_embeddings_for_resulting_transcript_document: Optional[bool] = True,
     llm_model_name: str = DEFAULT_MODEL_NAME, 
+    embedding_pooling_method: str = "means",
     corpus_identifier_string: str = "",
     req: Request = None,
     token: str = None,
