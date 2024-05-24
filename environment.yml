@@ -29,7 +29,9 @@ dependencies:
   - redis
   - ruff
   - scipy
+  - scikit-learn
   - sqlalchemy
   - textract-py3
   - uvicorn
   - uvloop
+  - zstandard

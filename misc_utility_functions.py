@@ -1,5 +1,5 @@
 from logger_config import setup_logger
-from embeddings_data_models import TextEmbedding, TokenLevelEmbeddingBundle, TokenLevelEmbeddingBundleCombinedFeatureVector
+from embeddings_data_models import TextEmbedding
 import socket
 import os
 import re
@@ -127,53 +127,32 @@ def configure_redis_in_background():
     threading.Thread(target=configure_redis_optimally).start()
     
 async def build_faiss_indexes(force_rebuild=False):
-    global faiss_indexes, token_faiss_indexes, associated_texts_by_model
+    global faiss_indexes, associated_texts_by_model_and_pooling_method
     if os.environ.get("FAISS_SETUP_DONE") == "1" and not force_rebuild:
-        return faiss_indexes, token_faiss_indexes, associated_texts_by_model
+        return faiss_indexes, associated_texts_by_model_and_pooling_method
     faiss_indexes = {}
-    token_faiss_indexes = {} # Separate FAISS indexes for token-level embeddings
-    associated_texts_by_model = defaultdict(list)  # Create a dictionary to store associated texts by model name
-    associated_token_level_embeddings_by_model = defaultdict(list)  # Create a dictionary to store associated token-level embeddings by model name
+    associated_texts_by_model_and_pooling_method = defaultdict(lambda: defaultdict(list))  # Create a nested dictionary to store associated texts by model name and pooling method
     async with AsyncSessionLocal() as session:
-        result = await session.execute(select(TextEmbedding.llm_model_name, TextEmbedding.text, TextEmbedding.embedding_json))
-        token_result = await session.execute(
-            select(
-                TokenLevelEmbeddingBundleCombinedFeatureVector.llm_model_name,
-                TokenLevelEmbeddingBundleCombinedFeatureVector.combined_feature_vector_json,
-                TokenLevelEmbeddingBundleCombinedFeatureVector.token_level_embedding_bundle,
-            ).join(TokenLevelEmbeddingBundle)
-        )
-        embeddings_by_model = defaultdict(list)
-        token_embeddings_by_model = defaultdict(list)
-        for row in result.fetchall(): # Process regular embeddings
+        result = await session.execute(select(TextEmbedding.llm_model_name, TextEmbedding.text, TextEmbedding.embedding_json, TextEmbedding.embedding_pooling_method))
+        embeddings_by_model_and_pooling = defaultdict(lambda: defaultdict(list))
+        for row in result.fetchall():  # Process regular embeddings
             llm_model_name = row[0]
-            associated_texts_by_model[llm_model_name].append(row[1])  # Store the associated text by model name
-            embeddings_by_model[llm_model_name].append((row[1], json.loads(row[2])))
-        for row in token_result.fetchall(): # Process token-level embeddings
-            llm_model_name = row[0]
-            associated_token_level_embeddings_by_model[llm_model_name].append(row[1])  # Store the associated token-level embeddings by model name
-            token_embeddings_by_model[llm_model_name].append(json.loads(row[2]))
-        for llm_model_name, embeddings in embeddings_by_model.items():
-            logger.info(f"Building Faiss index over embeddings for model {llm_model_name}...")
-            embeddings_array = np.array([e[1] for e in embeddings]).astype('float32')
-            if embeddings_array.size == 0:
-                logger.error(f"No embeddings were loaded from the database for model {llm_model_name}, so nothing to build the Faiss index with!")
-                continue
-            faiss.normalize_L2(embeddings_array)  # Normalize the vectors for cosine similarity
-            faiss_index = faiss.IndexFlatIP(embeddings_array.shape[1])  # Use IndexFlatIP for cosine similarity
-            faiss_index.add(embeddings_array)
-            faiss_indexes[llm_model_name] = faiss_index  # Store the index by model name
-        for llm_model_name, token_embeddings in token_embeddings_by_model.items():
-            token_embeddings_combined_feature_vector =  np.array([e[1] for e in token_embeddings]).astype('float32')
-            if token_embeddings_combined_feature_vector.size == 0:
-                logger.error(f"No token-level embeddings were loaded from the database for model {llm_model_name}, so nothing to build the Faiss index with!")
-                continue
-            faiss.normalize_L2(token_embeddings_combined_feature_vector)  # Normalize the vectors for cosine similarity
-            token_faiss_index = faiss.IndexFlatIP(token_embeddings_combined_feature_vector.shape[1])  # Use IndexFlatIP for cosine similarity
-            token_faiss_index.add(token_embeddings_combined_feature_vector)
-            token_faiss_indexes[llm_model_name] = token_faiss_index  # Store the token-level index by model name
+            embedding_pooling_method = row[3]
+            associated_texts_by_model_and_pooling_method[llm_model_name][embedding_pooling_method].append(row[1])  # Store the associated text by model name and pooling method
+            embeddings_by_model_and_pooling[llm_model_name][embedding_pooling_method].append((row[1], json.loads(row[2])))
+        for llm_model_name, embeddings_by_pooling in embeddings_by_model_and_pooling.items():
+            for embedding_pooling_method, embeddings in embeddings_by_pooling.items():
+                logger.info(f"Building Faiss index over embeddings for model {llm_model_name} with pooling method {embedding_pooling_method}...")
+                embeddings_array = np.array([e[1] for e in embeddings]).astype('float32')
+                if embeddings_array.size == 0:
+                    logger.error(f"No embeddings were loaded from the database for model {llm_model_name} with pooling method {embedding_pooling_method}, so nothing to build the Faiss index with!")
+                    continue
+                faiss.normalize_L2(embeddings_array)  # Normalize the vectors for cosine similarity
+                faiss_index = faiss.IndexFlatIP(embeddings_array.shape[1])  # Use IndexFlatIP for cosine similarity
+                faiss_index.add(embeddings_array)
+                faiss_indexes[(llm_model_name, embedding_pooling_method)] = faiss_index  # Store the index by model name and pooling method
     os.environ["FAISS_SETUP_DONE"] = "1"
-    return faiss_indexes, token_faiss_indexes, associated_texts_by_model, associated_token_level_embeddings_by_model
+    return faiss_indexes, associated_texts_by_model_and_pooling_method
 
 def normalize_logprobs(avg_logprob, min_logprob, max_logprob):
     range_logprob = max_logprob - min_logprob
@@ -181,22 +160,6 @@ def normalize_logprobs(avg_logprob, min_logprob, max_logprob):
 
 def truncate_string(s: str, max_length: int = 100) -> str:
     return s[:max_length]
-
-def analyze_token_embeddings(token_embeddings):
-    lengths = [len(lst) for lst in token_embeddings]
-    max_length = max(lengths)
-    min_length = min(lengths)
-    return lengths, max_length, min_length
-
-def filter_shortest_lists(token_embeddings):
-    lengths, max_length, min_length = analyze_token_embeddings(token_embeddings)
-    shortest_lists = [lst for lst in token_embeddings if len(lst) == min_length]
-    return shortest_lists
-
-def filter_longest_lists(token_embeddings):
-    lengths, max_length, min_length = analyze_token_embeddings(token_embeddings)
-    longest_lists = [lst for lst in token_embeddings if len(lst) == max_length]
-    return longest_lists
 
 def remove_pagination_breaks(text: str) -> str:
     text = re.sub(r'-(\n)(?=[a-z])', '', text) # Remove hyphens at the end of lines when the word continues on the next line

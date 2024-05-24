@@ -3,7 +3,7 @@ import asyncio
 from datetime import datetime
 from sqlalchemy import select
 from swiss_army_llama import DatabaseWriter, execute_with_retry, engine, AsyncSessionLocal
-from embeddings_data_models import Base, TextEmbedding, DocumentEmbedding, Document, TokenLevelEmbedding, TokenLevelEmbeddingBundle, TokenLevelEmbeddingBundleCombinedFeatureVector, AudioTranscript
+from embeddings_data_models import Base, TextEmbedding, DocumentEmbedding, Document, AudioTranscript
 from sqlalchemy.exc import OperationalError
 
 @pytest.fixture(scope='module')
@@ -70,58 +70,6 @@ async def test_enqueue_document_write(db_writer):
         await db_writer.dedicated_db_writer()
         result = await execute_with_retry(session, select(Document).where(Document.document_hash == "doc_hash"), OperationalError)
         assert result.scalar_one().document_hash == "doc_hash"
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("setup_db")
-async def test_enqueue_token_level_embedding_write(db_writer):
-    async with AsyncSessionLocal() as session:
-        token_embedding = TokenLevelEmbedding(
-            token="token",
-            llm_model_name="model",
-            token_level_embedding_json="{}",
-            ip_address="127.0.0.1",
-            request_time=datetime.now(),
-            response_time=datetime.now(),
-            total_time=1.0,
-            token_level_embedding_bundle_id=1
-        )
-        await db_writer.enqueue_write([token_embedding])
-        await db_writer.dedicated_db_writer()
-        result = await execute_with_retry(session, select(TokenLevelEmbedding).where(TokenLevelEmbedding.token == "token"), OperationalError)
-        assert result.scalar_one().token == "token"
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("setup_db")
-async def test_enqueue_token_level_embedding_bundle_write(db_writer):
-    async with AsyncSessionLocal() as session:
-        token_bundle = TokenLevelEmbeddingBundle(
-            input_text="input",
-            llm_model_name="model",
-            token_level_embeddings_bundle_json="{}",
-            ip_address="127.0.0.1",
-            request_time=datetime.now(),
-            response_time=datetime.now(),
-            total_time=1.0
-        )
-        await db_writer.enqueue_write([token_bundle])
-        await db_writer.dedicated_db_writer()
-        result = await execute_with_retry(session, select(TokenLevelEmbeddingBundle).where(TokenLevelEmbeddingBundle.input_text == "input"), OperationalError)
-        assert result.scalar_one().input_text == "input"
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("setup_db")
-async def test_enqueue_token_level_embedding_bundle_combined_feature_vector_write(db_writer):
-    async with AsyncSessionLocal() as session:
-        feature_vector = TokenLevelEmbeddingBundleCombinedFeatureVector(
-            token_level_embedding_bundle_id=1,
-            llm_model_name="model",
-            combined_feature_vector_json="{}",
-            combined_feature_vector_hash="hash"
-        )
-        await db_writer.enqueue_write([feature_vector])
-        await db_writer.dedicated_db_writer()
-        result = await execute_with_retry(session, select(TokenLevelEmbeddingBundleCombinedFeatureVector).where(TokenLevelEmbeddingBundleCombinedFeatureVector.combined_feature_vector_hash == "hash"), OperationalError)
-        assert result.scalar_one().combined_feature_vector_hash == "hash"
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("setup_db")

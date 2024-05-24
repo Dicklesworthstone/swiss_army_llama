@@ -1,5 +1,5 @@
 from misc_utility_functions import  is_redis_running, start_redis_server, build_faiss_indexes
-from database_functions import DatabaseWriter, initialize_db, delete_expired_rows, AsyncSessionLocal
+from database_functions import DatabaseWriter, initialize_db #, AsyncSessionLocal, delete_expired_rows 
 from ramdisk_functions import setup_ramdisk, copy_models_to_ramdisk, check_that_user_has_required_permissions_to_manage_ramdisks
 from logger_config import setup_logger
 from aioredlock import Aioredlock
@@ -15,16 +15,15 @@ import llama_cpp
 from typing import List, Tuple, Dict
 from decouple import config
 from fastapi import HTTPException
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+# from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 logger = setup_logger()
 
 embedding_model_cache = {} # Model cache to store loaded models
-token_level_embedding_model_cache = {} # Model cache to store loaded token-level embedding models
 text_completion_model_cache = {} # Model cache to store loaded text completion models
-scheduler = AsyncIOScheduler()
-scheduler.add_job(delete_expired_rows(AsyncSessionLocal), 'interval', hours=1)
-scheduler.start()
+# scheduler = AsyncIOScheduler()
+# scheduler.add_job(delete_expired_rows(AsyncSessionLocal), 'interval', hours=1)
+# scheduler.start()
 
 SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT = config("SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT", default=8089, cast=int)
 DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="openchat_v3.2_super", cast=str) 
@@ -71,7 +70,7 @@ def is_gpu_available():
         }
         
 async def initialize_globals():
-    global db_writer, faiss_indexes, token_faiss_indexes, associated_texts_by_model, redis, lock_manager
+    global db_writer, faiss_indexes, associated_texts_by_model_and_pooling_method, redis, lock_manager
     if not is_redis_running():
         logger.info("Starting Redis server...")
         start_redis_server()
@@ -98,14 +97,13 @@ async def initialize_globals():
             load_model(llm_model_name, raise_http_exception=False)
         except FileNotFoundError as e:
             logger.error(e)
-    faiss_indexes, token_faiss_indexes, associated_texts_by_model, associated_token_level_embeddings_by_model = await build_faiss_indexes()
+    faiss_indexes, associated_texts_by_model_and_pooling_method = await build_faiss_indexes()
 
 
 # other shared variables and methods
 db_writer = None
 faiss_indexes = None
-token_faiss_indexes = None
-associated_texts_by_model = None
+associated_texts_by_model_and_pooling_method = None
 redis = None
 lock_manager = None
 

@@ -1,13 +1,12 @@
 from sqlalchemy import Column, String, Float, DateTime, Integer, UniqueConstraint, ForeignKey, LargeBinary
 from sqlalchemy.dialects.sqlite import JSON
-from sqlalchemy.orm import declarative_base, relationship, validates
+from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy.ext.declarative import declared_attr
 from hashlib import sha3_256
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, field_validator
 from typing import List, Optional, Union, Dict
-from typing_extensions import Annotated
 from decouple import config
 from sqlalchemy import event
-from sqlalchemy.ext.hybrid import hybrid_property
 from datetime import datetime
 
 Base = declarative_base()
@@ -16,11 +15,21 @@ DEFAULT_MAX_COMPLETION_TOKENS = config("DEFAULT_MAX_COMPLETION_TOKENS", default=
 DEFAULT_NUMBER_OF_COMPLETIONS_TO_GENERATE = config("DEFAULT_NUMBER_OF_COMPLETIONS_TO_GENERATE", default=4, cast=int)
 DEFAULT_COMPLETION_TEMPERATURE = config("DEFAULT_COMPLETION_TEMPERATURE", default=0.7, cast=float)
 
-class TextEmbedding(Base):
+class SerializerMixin:
+    @declared_attr
+    def __tablename__(cls):
+        return cls.__name__.lower()
+
+    def as_dict(self):
+        return {c.key: getattr(self, c.key) for c in self.__table__.columns}
+    
+class TextEmbedding(Base, SerializerMixin):
     __tablename__ = "embeddings"
     id = Column(Integer, primary_key=True, index=True)
     text = Column(String, index=True)
     text_hash = Column(String, index=True)
+    embedding_pooling_method = Column(String, index=True)
+    embedding_hash = Column(String, index=True)
     llm_model_name = Column(String, index=True)
     corpus_identifier_string = Column(String, index=True)    
     embedding_json = Column(String)
@@ -29,36 +38,8 @@ class TextEmbedding(Base):
     response_time = Column(DateTime)
     total_time = Column(Float)
     document_file_hash = Column(String, ForeignKey('document_embeddings.file_hash'))
-    corpus_identifier_string = Column(String, index=True)
     document = relationship("DocumentEmbedding", back_populates="embeddings", foreign_keys=[document_file_hash, corpus_identifier_string])
     __table_args__ = (UniqueConstraint('text_hash', 'llm_model_name', name='_text_hash_model_uc'),)
-    @validates('text')
-    def update_text_hash(self, key, text):
-        self.text_hash = sha3_256(text.encode('utf-8')).hexdigest()
-        return text
-
-
-class TokenLevelEmbedding(Base):
-    __tablename__ = "token_level_embeddings"
-    id = Column(Integer, primary_key=True, index=True)
-    word = Column(String, index=True)
-    word_hash = Column(String, index=True)
-    llm_model_name = Column(String, index=True)
-    token_level_embedding_json = Column(String)
-    ip_address = Column(String)
-    request_time = Column(DateTime)
-    response_time = Column(DateTime)
-    total_time = Column(Float)
-    document_file_hash = Column(String, ForeignKey('document_token_level_embeddings.file_hash'))
-    corpus_identifier_string = Column(String, index=True)
-    document = relationship("DocumentTokenLevelEmbedding", back_populates="token_level_embeddings", foreign_keys=[document_file_hash, corpus_identifier_string])
-    token_level_embedding_bundle_id = Column(Integer, ForeignKey('token_level_embedding_bundles.id'))
-    token_level_embedding_bundle = relationship("TokenLevelEmbeddingBundle", back_populates="token_level_embeddings")
-    __table_args__ = (UniqueConstraint('word_hash', 'llm_model_name', name='_word_hash_model_uc'),)
-    @validates('word')
-    def update_word_hash(self, key, word):
-        self.word_hash = sha3_256(word.encode('utf-8')).hexdigest()
-        return word
 
 class DocumentEmbedding(Base):
     __tablename__ = "document_embeddings"
@@ -67,38 +48,19 @@ class DocumentEmbedding(Base):
     filename = Column(String)
     mimetype = Column(String)
     file_hash = Column(String, index=True)
+    embedding_pooling_method = Column(String, index=True)
     llm_model_name = Column(String, index=True)
     corpus_identifier_string = Column(String, index=True)
     file_data = Column(LargeBinary)  # To store the original file
     sentences = Column(String)
-    document_embedding_results_json = Column(JSON)  # To store the embedding results JSON
+    document_embedding_results_json_compressed_binary = Column(LargeBinary)  # To store the embedding results JSON
     ip_address = Column(String)
     request_time = Column(DateTime)
     response_time = Column(DateTime)
     total_time = Column(Float)
     embeddings = relationship("TextEmbedding", back_populates="document", foreign_keys=[TextEmbedding.document_file_hash])
     __table_args__ = (UniqueConstraint('file_hash', 'llm_model_name', 'corpus_identifier_string', name='_file_hash_model_corpus_uc'),)
-    document = relationship("Document", back_populates="document_embeddings", foreign_keys=[document_hash, corpus_identifier_string])
-
-class DocumentTokenLevelEmbedding(Base):
-    __tablename__ = "document_token_level_embeddings"
-    id = Column(Integer, primary_key=True, index=True)
-    document_hash = Column(String, ForeignKey('documents.document_hash'))
-    filename = Column(String)
-    mimetype = Column(String)
-    file_hash = Column(String, index=True)
-    llm_model_name = Column(String, index=True)
-    corpus_identifier_string = Column(String, index=True)
-    file_data = Column(LargeBinary)  # To store the original file
-    sentences = Column(String)
-    document_embedding_results_json = Column(JSON)  # To store the embedding results JSON
-    ip_address = Column(String)
-    request_time = Column(DateTime)
-    response_time = Column(DateTime)
-    total_time = Column(Float)
-    token_level_embeddings = relationship("TokenLevelEmbedding", back_populates="document", foreign_keys=[TokenLevelEmbedding.document_file_hash])
-    __table_args__ = (UniqueConstraint('file_hash', 'llm_model_name', 'corpus_identifier_string', name='_file_hash_model_corpus_uc'),)
-    document = relationship("Document", back_populates="document_token_level_embeddings", foreign_keys=[document_hash, corpus_identifier_string])
+    document = relationship("Document", back_populates="document_embeddings", foreign_keys=[document_hash])
 
 class Document(Base):
     __tablename__ = "documents"
@@ -107,8 +69,6 @@ class Document(Base):
     corpus_identifier_string = Column(String, index=True)    
     document_hash = Column(String, index=True)
     document_embeddings = relationship("DocumentEmbedding", back_populates="document", foreign_keys=[DocumentEmbedding.document_hash])
-    document_token_level_embeddings = relationship("DocumentTokenLevelEmbedding", back_populates="document", foreign_keys=[DocumentTokenLevelEmbedding.document_hash])
-    corpus_identifier_string = Column(String, index=True)
     def update_hash(self):  # Concatenate specific attributes from the document_embeddings relationship
         hash_data = "".join([emb.filename + emb.mimetype for emb in self.document_embeddings])
         self.document_hash = sha3_256(hash_data.encode('utf-8')).hexdigest()
@@ -118,62 +78,20 @@ def update_document_hash_on_append(target, value, initiator):
 @event.listens_for(Document.document_embeddings, 'remove')
 def update_document_hash_on_remove(target, value, initiator):
     target.update_hash()
-@event.listens_for(Document.document_token_level_embeddings, 'append')
-def update_document_token_level_hash_on_append(target, value, initiator):
-    target.update_hash()
-@event.listens_for(Document.document_token_level_embeddings, 'remove')
-def update_document_token_level_hash_hash_on_remove(target, value, initiator):
-    target.update_hash()
-    
-class TokenLevelEmbeddingBundle(Base):
-    __tablename__ = "token_level_embedding_bundles"
-    id = Column(Integer, primary_key=True, index=True)
-    input_text = Column(String, index=True)
-    input_text_hash = Column(String, index=True)  # Hash of the input text
-    llm_model_name = Column(String, index=True)
-    corpus_identifier_string = Column(String, index=True)
-    token_level_embeddings_bundle_json = Column(JSON)  # JSON containing the token-level embeddings
-    ip_address = Column(String)
-    request_time = Column(DateTime)
-    response_time = Column(DateTime)
-    total_time = Column(Float)
-    token_level_embeddings = relationship("TokenLevelEmbedding", back_populates="token_level_embedding_bundle")
-    combined_feature_vector = relationship("TokenLevelEmbeddingBundleCombinedFeatureVector", uselist=False, back_populates="token_level_embedding_bundle")
-    __table_args__ = (UniqueConstraint('input_text_hash', 'llm_model_name', name='_input_text_hash_model_uc'),)
-    @validates('input_text')
-    def update_input_text_hash(self, key, input_text):
-        self.input_text_hash = sha3_256(input_text.encode('utf-8')).hexdigest()
-        return input_text
-
-class TokenLevelEmbeddingBundleCombinedFeatureVector(Base):
-    __tablename__ = "token_level_embedding_bundle_combined_feature_vectors"
-    id = Column(Integer, primary_key=True, index=True)
-    token_level_embedding_bundle_id = Column(Integer, ForeignKey('token_level_embedding_bundles.id'))
-    llm_model_name = Column(String, index=True)
-    corpus_identifier_string = Column(String, index=True)
-    combined_feature_vector_json = Column(String)  # Store as JSON string    
-    combined_feature_vector_hash = Column(String, index=True)  # Hash of the combined feature vector
-    token_level_embedding_bundle = relationship("TokenLevelEmbeddingBundle", back_populates="combined_feature_vector")        
-    __table_args__ = (UniqueConstraint('combined_feature_vector_hash', 'llm_model_name', name='_combined_feature_vector_hash_model_uc'),)
-    @hybrid_property
-    def input_text(self):
-        return self.token_level_embedding_bundle.input_text    
-    @validates('combined_feature_vector_json')
-    def update_text_hash(self, key, combined_feature_vector_json):
-        self.combined_feature_vector_hash = sha3_256(combined_feature_vector_json.encode('utf-8')).hexdigest()
-        return combined_feature_vector_json
 
 # Request/Response models start here:
 
 class EmbeddingRequest(BaseModel):
     text: str
     llm_model_name: Optional[str] = DEFAULT_MODEL_NAME
+    embedding_pooling_method: str = "means"
     corpus_identifier_string: Optional[str] = ""
 
 class SimilarityRequest(BaseModel):
     text1: str
     text2: str
     llm_model_name: Optional[str] = DEFAULT_MODEL_NAME
+    embedding_pooling_method: str = "means"
     similarity_measure: Optional[str] = "all"
     @field_validator('similarity_measure')
     def validate_similarity_measure(cls, value):
@@ -186,17 +104,19 @@ class SemanticSearchRequest(BaseModel):
     query_text: str
     number_of_most_similar_strings_to_return: int = 10
     llm_model_name: str = DEFAULT_MODEL_NAME
+    embedding_pooling_method: str = "means"
     corpus_identifier_string: str = ""
-    use_token_level_embeddings: Annotated[int, Field(ge=0, le=1)] = 0
         
 class SemanticSearchResponse(BaseModel):
     query_text: str
     corpus_identifier_string: str
+    embedding_pooling_method: str = "means"
     results: List[dict]  # List of similar strings and their similarity scores using cosine similarity with Faiss (in descending order)
 
 class AdvancedSemanticSearchRequest(BaseModel):
     query_text: str
     llm_model_name: str = DEFAULT_MODEL_NAME
+    embedding_pooling_method: str = "means"
     corpus_identifier_string: str
     similarity_filter_percentage: float = 0.98
     number_of_most_similar_strings_to_return: Optional[int] = None
@@ -204,15 +124,30 @@ class AdvancedSemanticSearchRequest(BaseModel):
 class AdvancedSemanticSearchResponse(BaseModel):
     query_text: str
     corpus_identifier_string: str
+    embedding_pooling_method: str = "means"
     results: List[Dict[str, Union[str, float, Dict[str, float]]]]
 
 class EmbeddingResponse(BaseModel):
+    id: int
+    text: str
+    text_hash: str
+    embedding_pooling_method: str
+    embedding_hash: str
+    llm_model_name: str
+    corpus_identifier_string: str
+    embedding_json: str
+    ip_address: Optional[str]
+    request_time: datetime
+    response_time: datetime
+    total_time: float
+    document_file_hash: Optional[str]
     embedding: List[float]
 
 class SimilarityResponse(BaseModel):
     text1: str
     text2: str
     similarity_measure: str
+    embedding_pooling_method: str = "means"
     similarity_score: Union[float, Dict[str, float]]  # Now can be either a float or a dictionary
     embedding1: List[float]
     embedding2: List[float]
