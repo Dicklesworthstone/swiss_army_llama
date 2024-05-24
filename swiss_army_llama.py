@@ -81,7 +81,7 @@ USE_RAMDISK = config("USE_RAMDISK", default=False, cast=bool)
 USE_RESOURCE_MONITORING = config("USE_RESOURCE_MONITORING", default=1, cast=bool)
 RAMDISK_PATH = config("RAMDISK_PATH", default="/mnt/ramdisk", cast=str)
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
-
+MAX_THOUSANDS_OF_WORDs_FOR_DOCUMENT_EMBEDDING = config("MAX_THOUSANDS_OF_WORDs_FOR_DOCUMENT_EMBEDDING", default=100, cast=int)
 logger.info(f"USE_RAMDISK is set to: {USE_RAMDISK}")
 
 description_string = """
@@ -543,6 +543,7 @@ The request must contain the following attributes:
 - `corpus_identifier_string`: An optional string identifier to restrict the search to a specific corpus.
 - `similarity_filter_percentage`: (Optional) The percentage of embeddings to filter based on cosine similarity, defaults to 0.02 (i.e., top 2%).
 - `number_of_most_similar_strings_to_return`: (Optional) The number of most similar strings to return after applying the second similarity measure, defaults to 10.
+- `result_sorting_metric`: (Optional) The metric to sort the results by, defaults to 'hoeffding_d'. Choices: 'hoeffding_d', 'cosine_similarity', 'spearman_rho', 'kendall_tau', 'approximate_distance_correlation', 'jensen_shannon_similarity', 'hamming_distance'.
 
 ### Example:
 ```json
@@ -553,6 +554,7 @@ The request must contain the following attributes:
     "corpus_identifier_string": "specific_corpus"
     "similarity_filter_percentage": 0.02,
     "number_of_most_similar_strings_to_return": 5,
+    "result_sorting_metric": "hoeffding_d"
 }
 ```
 
@@ -633,7 +635,7 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
                         "similarity_to_query_text": similarity_stats_json
                     })
                 num_to_return = request.number_of_most_similar_strings_to_return if request.number_of_most_similar_strings_to_return is not None else len(final_results)
-                results = sorted(final_results, key=lambda x: x["similarity_to_query_text"]["hoeffding_d"], reverse=True)[:num_to_return]
+                results = sorted(final_results, key=lambda x: x["similarity_to_query_text"][request.result_sorting_metric], reverse=True)[:num_to_return]
                 response_time = datetime.utcnow()
                 total_time = (response_time - request_time).total_seconds()
                 logger.info(f"Finished advanced search in {total_time} seconds. Found {len(results)} results.")
@@ -720,11 +722,11 @@ async def get_all_embedding_vectors_for_document(
         with open(temp_file_path, 'rb') as buffer:
             for chunk in iter(lambda: buffer.read(1024), b''):
                 hash_obj.update(chunk)
-        file_hash = hash_obj.hexdigest()
-        logger.info(f"SHA3-256 hash of submitted file: {file_hash}")
+        document_file_hash = hash_obj.hexdigest()
+        logger.info(f"SHA3-256 hash of submitted file: {document_file_hash}")
         if corpus_identifier_string == "":
-            corpus_identifier_string = file_hash
-        unique_id = f"document_embedding_{file_hash}_{llm_model_name}_{embedding_pooling_method}"
+            corpus_identifier_string = document_file_hash
+        unique_id = f"document_embedding_{document_file_hash}_{llm_model_name}_{embedding_pooling_method}"
         # Exponential backoff with jitter for acquiring lock
         max_retries = 5
         for attempt in range(max_retries):
@@ -740,7 +742,7 @@ async def get_all_embedding_vectors_for_document(
             raise HTTPException(status_code=503, detail="Service temporarily unavailable. Please try again later.")
         try:
             async with AsyncSessionLocal() as session:
-                result = await session.execute(select(DocumentEmbedding).filter(DocumentEmbedding.file_hash == file_hash, DocumentEmbedding.llm_model_name == llm_model_name, DocumentEmbedding.embedding_pooling_method == embedding_pooling_method))
+                result = await session.execute(select(DocumentEmbedding).filter(DocumentEmbedding.document_file_hash == document_file_hash, DocumentEmbedding.llm_model_name == llm_model_name, DocumentEmbedding.embedding_pooling_method == embedding_pooling_method))
                 existing_document_embedding = result.scalar_one_or_none()
                 if existing_document_embedding:
                     logger.info("Document has been processed before, returning existing result")
@@ -758,6 +760,8 @@ async def get_all_embedding_vectors_for_document(
                     result = magika.identify_bytes(input_data_binary)
                     mime_type = result.output.mime_type
                     sentences, thousands_of_input_words = await parse_submitted_document_file_into_sentence_strings_func(temp_file_path, mime_type)
+                    if thousands_of_input_words > MAX_THOUSANDS_OF_WORDs_FOR_DOCUMENT_EMBEDDING:
+                        raise HTTPException(status_code=400, detail=f"Document contains more than {MAX_THOUSANDS_OF_WORDs_FOR_DOCUMENT_EMBEDDING*1000:,} words, which would take too long to compute embeddings for. Please submit a smaller document.")
                     first_10_words_of_input_text = ' '.join(' '.join(sentences).split()[:10])
                     logger.info(f"Received request to extract embeddings for document with MIME type: {mime_type} and size: {os.path.getsize(temp_file_path):,} bytes from IP address: {client_ip}; First 10 words of the document: '{first_10_words_of_input_text}...'")
                     input_data = {
@@ -767,7 +771,7 @@ async def get_all_embedding_vectors_for_document(
                     }
                     context = start_resource_monitoring("get_all_embedding_vectors_for_document", input_data, client_ip)
                     try:
-                        json_content = await compute_embeddings_for_document(strings=sentences, llm_model_name=llm_model_name, embedding_pooling_method=embedding_pooling_method, corpus_identifier_string=corpus_identifier_string, client_ip=client_ip, document_file_hash=file_hash, file=file, original_file_content=input_data_binary, json_format=json_format)
+                        json_content = await compute_embeddings_for_document(sentences=sentences, llm_model_name=llm_model_name, embedding_pooling_method=embedding_pooling_method, corpus_identifier_string=corpus_identifier_string, client_ip=client_ip, document_file_hash=document_file_hash, file=file, original_file_content=input_data_binary, json_format=json_format)
                         logger.info(f"Done getting all regular embeddings for document containing {len(sentences):,} sentences with model {llm_model_name} and embedding pooling method {embedding_pooling_method} and corpus {corpus_identifier_string}")
                     except Exception as e:
                         logger.error(f"Error while computing embeddings for document: {e}")
@@ -1069,7 +1073,14 @@ async def compute_transcript_with_whisper_from_audio(
     }
     context = start_resource_monitoring("compute_transcript_with_whisper_from_audio", input_data, req.client.host if req else "localhost")
     try:
-        audio_transcript = await get_or_compute_transcript(temp_file_path, compute_embeddings_for_resulting_transcript_document, llm_model_name, req, corpus_identifier_string)
+        audio_transcript = await get_or_compute_transcript(
+            file=file,
+            compute_embeddings_for_resulting_transcript_document=compute_embeddings_for_resulting_transcript_document,
+            llm_model_name=llm_model_name,
+            embedding_pooling_method=embedding_pooling_method,
+            corpus_identifier_string=corpus_identifier_string,
+            req=req,
+        )
         return JSONResponse(content=audio_transcript)
     except Exception as e:
         os.remove(temp_file_path)

@@ -265,7 +265,7 @@ The application uses a SQLite database via SQLAlchemy ORM. Here are the data mod
 - `document_hash`: Foreign Key referencing the Documents table
 - `filename`: Name of the document file
 - `mimetype`: MIME type of the document file
-- `file_hash`: Hash of the file
+- `document_file_hash`: Hash of the file
 - `llm_model_name`: Model used to compute the embedding
 - `file_data`: Binary data of the original file
 - `document_embedding_results_json_compressed_binary`: The computed embedding results in JSON format compressed with Z-standard compression
@@ -288,7 +288,7 @@ The application uses a SQLite database via SQLAlchemy ORM. Here are the data mod
 ### Database Relationships
 
 1. **TextEmbedding - DocumentEmbedding**:
-   - `TextEmbedding` has a Foreign Key `document_file_hash` that references `DocumentEmbedding`'s `file_hash`.
+   - `TextEmbedding` has a Foreign Key `document_file_hash` that references `DocumentEmbedding`'s `document_file_hash`.
    - This means multiple text embeddings can belong to a single document embedding, establishing a one-to-many relationship.
   
 2. **DocumentEmbedding - Document**:

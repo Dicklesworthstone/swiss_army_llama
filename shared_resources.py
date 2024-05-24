@@ -1,5 +1,5 @@
 from misc_utility_functions import  is_redis_running, start_redis_server, build_faiss_indexes
-from database_functions import DatabaseWriter, initialize_db #, AsyncSessionLocal, delete_expired_rows 
+from database_functions import DatabaseWriter, initialize_db, AsyncSessionLocal, delete_expired_rows 
 from ramdisk_functions import setup_ramdisk, copy_models_to_ramdisk, check_that_user_has_required_permissions_to_manage_ramdisks
 from logger_config import setup_logger
 from aioredlock import Aioredlock
@@ -15,15 +15,12 @@ import llama_cpp
 from typing import List, Tuple, Dict
 from decouple import config
 from fastapi import HTTPException
-# from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 logger = setup_logger()
 
 embedding_model_cache = {} # Model cache to store loaded models
 text_completion_model_cache = {} # Model cache to store loaded text completion models
-# scheduler = AsyncIOScheduler()
-# scheduler.add_job(delete_expired_rows(AsyncSessionLocal), 'interval', hours=1)
-# scheduler.start()
 
 SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT = config("SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT", default=8089, cast=int)
 DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="openchat_v3.2_super", cast=str) 
@@ -39,6 +36,12 @@ USE_RAMDISK = config("USE_RAMDISK", default=False, cast=bool)
 USE_VERBOSE = config("USE_VERBOSE", default=False, cast=bool)
 RAMDISK_PATH = config("RAMDISK_PATH", default="/mnt/ramdisk", cast=str)
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
+USE_AUTOMATIC_PURGING_OF_EXPIRED_RECORDS = config("USE_AUTOMATIC_PURGING_OF_EXPIRED_RECORDS", default=1, cast=bool)
+
+if USE_AUTOMATIC_PURGING_OF_EXPIRED_RECORDS:
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(delete_expired_rows(AsyncSessionLocal), 'interval', hours=1)
+    scheduler.start()
 
 def is_gpu_available():
     try:

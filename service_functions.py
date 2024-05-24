@@ -25,7 +25,6 @@ import pandas as pd
 import scipy
 import textract
 import zstandard as zstd
-from sqlalchemy import text as sql_text
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 from fastapi import HTTPException, Request, UploadFile
@@ -84,11 +83,13 @@ def prepare_string_for_embedding(text: str) -> str:
     text = ''.join(ch for ch in text if unicodedata.category(ch)[0] != 'C')
     # Ensure text is ASCII-encoded to catch any remaining unusual characters
     text = text.encode('ascii', 'ignore').decode('ascii')
-    # Truncate to a maximum length of 2000 characters
-    if len(text) > 2000:
-        text = text[:2000]
+    # Truncate to a maximum length of 5000 characters
+    if len(text) > 5000:
+        text = text[:5000]
     # Eliminate all blank lines
     text = ' '.join(line for line in text.splitlines() if line.strip() != '')
+    #Final trimming
+    text = text.strip()
     return text
 
 def compress_data(input_data):
@@ -101,28 +102,6 @@ def compress_data(input_data):
 
 def decompress_data(compressed_data):
     return zstd.decompress(compressed_data)
-
-def extract_embeddings(input_data):
-    embeddings = []
-    for item in input_data['data']:
-        if isinstance(item['embedding'][0], list):  # Check if the first element is a list
-            for embedding_list in item['embedding']:
-                embeddings.extend(embedding_list)
-        else:  # Single list of floats
-            embeddings.extend(item['embedding'])
-    return embeddings
-
-def extract_embeddings_list(input_data):
-    embeddings_list = []
-    for item in input_data['data']:
-        if isinstance(item['embedding'][0], list):  # Check if the first element is a list
-            embeddings = []
-            for embedding_list in item['embedding']:
-                embeddings.extend(embedding_list)
-            embeddings_list.append(embeddings)
-        else:  # Single list of floats
-            embeddings_list.append(item['embedding'])
-    return embeddings_list
 
 def add_model_url(new_url: str) -> str:
     corrected_url = new_url
@@ -224,8 +203,7 @@ async def get_or_compute_embedding(request: EmbeddingRequest, req: Request = Non
     text_embedding_instance = await get_embedding_from_db(
         request.text, request.llm_model_name, request.embedding_pooling_method
     )
-    # Check if embedding exists in the database
-    if text_embedding_instance is not None:
+    if text_embedding_instance is not None: # Check if embedding exists in the database
         response_time = datetime.utcnow()  # Capture response time as datetime object
         total_time = (
             response_time - request_time
@@ -334,27 +312,41 @@ async def calculate_sentence_embeddings_list(llama, texts: list, embedding_pooli
     return list_of_embedding_entry_dicts
 
 async def batch_save_embeddings_to_db(embeddings: List[TextEmbedding]):
-    await shared_resources.db_writer.enqueue_write(embeddings)  # Perform a single batch insertion
-
-async def compute_embeddings_for_document(strings: list, llm_model_name: str, embedding_pooling_method: str, corpus_identifier_string: str, client_ip: str, document_file_hash: str, file, original_file_content: bytes, json_format: str = 'records') -> list:
-    strings = [prepare_string_for_embedding(text) for text in strings]
+    async with AsyncSessionLocal() as session:
+        # Extract the unique embedding_hashes from the embeddings list
+        embedding_hashes = [embedding.embedding_hash for embedding in embeddings]
+        # Query the database for existing embeddings with the same hashes
+        existing_embeddings_query = select(TextEmbedding.embedding_hash).where(TextEmbedding.embedding_hash.in_(embedding_hashes))
+        result = await session.execute(existing_embeddings_query)
+        existing_embedding_hashes = {row.embedding_hash for row in result}
+        # Filter out embeddings that already exist in the database
+        embeddings_to_insert = [embedding for embedding in embeddings if embedding.embedding_hash not in existing_embedding_hashes]
+        # Batch insert the remaining embeddings
+        if embeddings_to_insert:
+            session.add_all(embeddings_to_insert)
+            await session.commit()
+            
+async def compute_embeddings_for_document(sentences: list, llm_model_name: str, embedding_pooling_method: str, corpus_identifier_string: str, client_ip: str, document_file_hash: str, file: UploadFile, original_file_content: bytes, json_format: str = 'records') -> list:
+    request_time = datetime.utcnow()
+    sentences = [prepare_string_for_embedding(text) for text in sentences]
     model = load_model(llm_model_name)
     try:
-        list_of_embedding_entry_dicts = await calculate_sentence_embeddings_list(model, strings, embedding_pooling_method)
+        list_of_embedding_entry_dicts = await calculate_sentence_embeddings_list(model, sentences, embedding_pooling_method)
     except Exception as e:
         logger.error(f"Error computing embeddings for batch: {e}")
         logger.error(traceback.format_exc())
         raise
     embeddings_to_save = []
-    results = []
+    list_of_embedding_hashes_added = []
     for embedding_entry_dict in list_of_embedding_entry_dicts:
         embedding = embedding_entry_dict['embedding']
         embedding_hash = embedding_entry_dict['embedding_hash']
+        if embedding_hash in list_of_embedding_hashes_added:
+            continue
         text_index = embedding_entry_dict['text_index']
-        text = strings[text_index]
+        text = sentences[text_index]
         text_hash = sha3_256(text.encode('utf-8')).hexdigest()
         embedding_json = json.dumps(embedding)
-        request_time = datetime.utcnow()
         response_time = datetime.utcnow()
         total_time = (response_time - request_time).total_seconds()
         embedding_instance = TextEmbedding(
@@ -372,13 +364,24 @@ async def compute_embeddings_for_document(strings: list, llm_model_name: str, em
             document_file_hash=document_file_hash,
         )
         embeddings_to_save.append(embedding_instance)
-        results.append((text, embedding))
+        list_of_embedding_hashes_added.append(embedding_hash)
     logger.info(f"Storing {len(embeddings_to_save):,} text embeddings in database...")
     await batch_save_embeddings_to_db(embeddings_to_save)
     logger.info(f"Done storing {len(embeddings_to_save):,} text embeddings in database.")
     document_embedding_results_df = pd.DataFrame(list_of_embedding_entry_dicts)
     json_content = document_embedding_results_df.to_json(orient=json_format or 'records').encode()
-    await store_document_embeddings_in_db(file, document_file_hash, original_file_content, strings, json_content, llm_model_name, embedding_pooling_method, corpus_identifier_string, client_ip, request_time)
+    await store_document_embeddings_in_db(
+        file=file,
+        document_file_hash=document_file_hash,
+        original_file_content=original_file_content,
+        sentences=sentences,
+        json_content=json_content,
+        llm_model_name=llm_model_name,
+        embedding_pooling_method=embedding_pooling_method,
+        corpus_identifier_string=corpus_identifier_string,
+        client_ip=client_ip,
+        request_time=request_time,
+    )    
     return json_content
 
 async def parse_submitted_document_file_into_sentence_strings_func(temp_file_path: str, mime_type: str):
@@ -408,22 +411,22 @@ async def parse_submitted_document_file_into_sentence_strings_func(temp_file_pat
     thousands_of_input_words = sum(len(s.split()) for s in strings)
     return strings, thousands_of_input_words
 
-async def _get_document_from_db(file_hash: str):
+async def _get_document_from_db(document_file_hash: str):
     async with AsyncSessionLocal() as session:
-        result = await session.execute(select(Document).filter(Document.document_hash == file_hash))
+        result = await session.execute(select(Document).filter(Document.document_hash == document_file_hash))
         return result.scalar_one_or_none()
 
-async def store_document_embeddings_in_db(file, file_hash: str, original_file_content: bytes, sentences: List[str], json_content: bytes, llm_model_name: str, embedding_pooling_method:str, corpus_identifier_string: str, client_ip: str, request_time: datetime):
+async def store_document_embeddings_in_db(file: UploadFile, document_file_hash: str, original_file_content: bytes, sentences: List[str], json_content: bytes, llm_model_name: str, embedding_pooling_method:str, corpus_identifier_string: str, client_ip: str, request_time: datetime):
     sentences = json.dumps(sentences)
-    document = await _get_document_from_db(file_hash)
+    document = await _get_document_from_db(document_file_hash)
     if not document:
-        document = Document(document_hash=file_hash, llm_model_name=llm_model_name, corpus_identifier_string=corpus_identifier_string)
+        document = Document(document_hash=document_file_hash, llm_model_name=llm_model_name, corpus_identifier_string=corpus_identifier_string)
         await shared_resources.db_writer.enqueue_write([document])
     document_embedding_results_json_compressed_binary = compress_data(json_content)
     document_embedding = DocumentEmbedding(
         filename=file.filename,
         mimetype=file.content_type,
-        file_hash=file_hash,
+        document_file_hash=document_file_hash,
         llm_model_name=llm_model_name,
         embedding_pooling_method=embedding_pooling_method,
         corpus_identifier_string=corpus_identifier_string,
@@ -517,7 +520,7 @@ async def generate_completion_from_llm(request: TextCompletionRequest, req: Requ
         list_of_responses.append(response)
     return list_of_responses
 
-def validate_bnf_grammar_func(grammar):
+def validate_bnf_grammar_func(grammar: str):
     defined_rules, used_rules = set(), set()
     for line in grammar.strip().split('\n'):
         if '::=' not in line: 
@@ -602,7 +605,7 @@ async def _get_transcript_from_db(audio_file_hash: str) -> Optional[AudioTranscr
         transcript = result.scalars().first()
         return transcript
 
-async def save_transcript_to_db(audio_file_hash, audio_file_name, audio_file_size_mb, transcript_segments, info, ip_address, request_time, response_time, total_time, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, corpus_identifier_string):
+async def save_transcript_to_db(audio_file_hash: str, audio_file_name: str, audio_file_size_mb: float, transcript_segments: json.dumps, info: json.dumps, ip_address: str, request_time: datetime, response_time: datetime, total_time: float, combined_transcript_text: str, combined_transcript_text_list_of_metadata_dicts: json.dumps, corpus_identifier_string: str):
     audio_transcript = AudioTranscript(
         audio_file_hash=audio_file_hash,
         audio_file_name=audio_file_name,
@@ -619,22 +622,23 @@ async def save_transcript_to_db(audio_file_hash, audio_file_name, audio_file_siz
     )
     await shared_resources.db_writer.enqueue_write([audio_transcript])
 
-async def compute_and_store_transcript_embeddings(audio_file_name: str, list_of_transcript_sentences: list, llm_model_name: str, embedding_pooling_method: str, corpus_identifier_string: str, ip_address: str, combined_transcript_text: str, req: Request):
+async def compute_and_store_transcript_embeddings(audio_file_name: str, sentences: list, llm_model_name: str, embedding_pooling_method: str, corpus_identifier_string: str, ip_address: str, combined_transcript_text: str, req: Request):
+    request_time=datetime.utcnow()
     logger.info(f"Now computing embeddings for entire transcript of {audio_file_name}...")
     zip_dir = 'generated_transcript_embeddings_zip_files'
     if not os.path.exists(zip_dir):
         os.makedirs(zip_dir)
     sanitized_file_name = clean_filename_for_url_func(audio_file_name)
     document_name = f"automatic_whisper_transcript_of__{sanitized_file_name}"
-    file_hash = sha3_256(combined_transcript_text.encode('utf-8')).hexdigest()
+    document_file_hash = sha3_256(combined_transcript_text.encode('utf-8')).hexdigest()
     sentences = sophisticated_sentence_splitter(combined_transcript_text)
     computed_embeddings = await compute_embeddings_for_document(
-        strings=list_of_transcript_sentences,
+        sentences=sentences,
         llm_model_name=llm_model_name,
         embedding_pooling_method=embedding_pooling_method,
         corpus_identifier_string=corpus_identifier_string,
         client_ip=ip_address,
-        document_file_hash=file_hash,
+        document_file_hash=document_file_hash,
         file=None,
         original_file_content=combined_transcript_text.encode(),
         json_format="records",
@@ -649,23 +653,28 @@ async def compute_and_store_transcript_embeddings(audio_file_name: str, list_of_
     logger.info(f"Storing transcript embeddings for {audio_file_name} in the database...")
     await store_document_embeddings_in_db(
         file=fake_upload_file,
-        document_file_hash=file_hash,
+        document_file_hash=document_file_hash,
         original_file_content=combined_transcript_text.encode(),
-        strings=sentences,
+        sentences=sentences,
         json_content=json.dumps(computed_embeddings).encode(),
         llm_model_name=llm_model_name,
         embedding_pooling_method=embedding_pooling_method,
         corpus_identifier_string=corpus_identifier_string,
         client_ip=ip_address,
-        request_time=datetime.utcnow(),
+        request_time=request_time,
     )
     return full_download_url
 
-async def compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio_file_path, audio_file_name, audio_file_size_mb, ip_address, req: Request, corpus_identifier_string: str, compute_embeddings_for_resulting_transcript_document=True, llm_model_name=DEFAULT_MODEL_NAME):
-    model_size = "large-v2"
-    logger.info(f"Loading Whisper model {model_size}...")
+async def compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio_file_path, audio_file_name, audio_file_size_mb, ip_address, req: Request, corpus_identifier_string: str, embedding_pooling_method: str,compute_embeddings_for_resulting_transcript_document=True, llm_model_name=DEFAULT_MODEL_NAME):
+    model_size = "large-v3"
+    logger.info(f"Loading Whisper model {model_size}...")+
     num_workers = 1 if psutil.virtual_memory().total < 32 * (1024 ** 3) else min(4, max(1, int((psutil.virtual_memory().total - 32 * (1024 ** 3)) / (4 * (1024 ** 3))))) # Only use more than 1 worker if there is at least 32GB of RAM; then use 1 worker per additional 4GB of RAM up to 4 workers max
-    model = await run_in_threadpool(WhisperModel, model_size, device="cpu", compute_type="auto", cpu_threads=os.cpu_count(), num_workers=num_workers)
+    with suppress_stdout_stderr():
+        gpu_info = is_gpu_available()
+        if gpu_info['gpu_found']:
+            model = await run_in_threadpool(WhisperModel, model_size, device="cuda", compute_type="auto")
+        else:
+            model = await run_in_threadpool(WhisperModel, model_size, device="cpu", compute_type="auto", cpu_threads=os.cpu_count(), num_workers=num_workers)
     request_time = datetime.utcnow()
     logger.info(f"Computing transcript for {audio_file_name} which has a {audio_file_size_mb :.2f}MB file size...")
     segments, info = await run_in_threadpool(model.transcribe, audio_file_path, beam_size=20)
@@ -684,13 +693,35 @@ async def compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio
         segment_details.append(details)
     combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, list_of_transcript_sentences = merge_transcript_segments_into_combined_text(segment_details)    
     if compute_embeddings_for_resulting_transcript_document:
-        download_url = await compute_and_store_transcript_embeddings(audio_file_name, list_of_transcript_sentences, llm_model_name, corpus_identifier_string, ip_address, combined_transcript_text, req)
+        download_url = await compute_and_store_transcript_embeddings(
+            audio_file_name=audio_file_name,
+            sentences=list_of_transcript_sentences,
+            llm_model_name=llm_model_name,
+            embedding_pooling_method=embedding_pooling_method,
+            corpus_identifier_string=corpus_identifier_string,
+            ip_address=ip_address,
+            combined_transcript_text=combined_transcript_text,
+            req=req,
+        )
     else:
         download_url = ''
     response_time = datetime.utcnow()
     total_time = (response_time - request_time).total_seconds()
     logger.info(f"Transcript computed in {total_time:,.2f} seconds.")
-    await save_transcript_to_db(audio_file_hash, audio_file_name, audio_file_size_mb, segment_details, info, ip_address, request_time, response_time, total_time, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, corpus_identifier_string)
+    await save_transcript_to_db(
+        audio_file_hash=audio_file_hash,
+        audio_file_name=audio_file_name,
+        audio_file_size_mb=audio_file_size_mb,
+        transcript_segments=segments,
+        info=info,
+        ip_address=ip_address,
+        request_time=request_time,
+        response_time=response_time,
+        total_time=total_time,
+        combined_transcript_text=combined_transcript_text,
+        combined_transcript_text_list_of_metadata_dicts=combined_transcript_text_list_of_metadata_dicts,
+        corpus_identifier_string=corpus_identifier_string
+    )
     info_dict = info._asdict()
     return segment_details, info_dict, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, request_time, response_time, total_time, download_url
     
@@ -706,7 +737,7 @@ async def get_or_compute_transcript(file: UploadFile,
     file_contents = await file.read()
     audio_file_hash = sha3_256(file_contents).hexdigest()
     file.file.seek(0)  # Reset file pointer after read
-    unique_id = f"transcript_{audio_file_hash}_{llm_model_name}"
+    unique_id = f"transcript_{audio_file_hash}_{llm_model_name}_{embedding_pooling_method}"
     lock = await shared_resources.lock_manager.lock(unique_id)    
     if lock.valid:
         try:            
@@ -722,7 +753,27 @@ async def get_or_compute_transcript(file: UploadFile,
                 audio_file_name = tmp_file.name
             if corpus_identifier_string == "":
                 corpus_identifier_string = audio_file_hash
-            segment_details, info, combined_transcript_text, combined_transcript_text_list_of_metadata_dicts, request_time, response_time, total_time, download_url = await compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio_file_name, file.filename, audio_file_size_mb, ip_address, req, corpus_identifier_string, compute_embeddings_for_resulting_transcript_document, llm_model_name)
+            (
+                segment_details,
+                info,
+                combined_transcript_text,
+                combined_transcript_text_list_of_metadata_dicts,
+                request_time,
+                response_time,
+                total_time,
+                download_url,
+            ) = await compute_transcript_with_whisper_from_audio_func(
+                audio_file_hash=audio_file_hash,
+                audio_file_path=audio_file_name,
+                audio_file_name=file.filename,
+                audio_file_size_mb=audio_file_size_mb,
+                ip_address=ip_address,
+                req=req,
+                corpus_identifier_string=corpus_identifier_string,
+                embedding_pooling_method=embedding_pooling_method,
+                compute_embeddings_for_resulting_transcript_document=compute_embeddings_for_resulting_transcript_document,
+                llm_model_name=llm_model_name,
+            )
             audio_transcript_response = {
                 "audio_file_hash": audio_file_hash,
                 "audio_file_name": file.filename,
@@ -736,7 +787,9 @@ async def get_or_compute_transcript(file: UploadFile,
                 "response_time": response_time,
                 "total_time": total_time,
                 "url_to_download_zip_file_of_embeddings": download_url if compute_embeddings_for_resulting_transcript_document else "",
-                "corpus_identifier_string": corpus_identifier_string
+                "llm_model_name": llm_model_name if compute_embeddings_for_resulting_transcript_document else "",
+                "embedding_pooling_method": embedding_pooling_method if compute_embeddings_for_resulting_transcript_document else "",
+                "corpus_identifier_string": corpus_identifier_string if compute_embeddings_for_resulting_transcript_document else "",
             }
             os.remove(audio_file_name)
             return AudioTranscriptResponse(**audio_transcript_response)

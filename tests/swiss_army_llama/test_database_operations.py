@@ -44,7 +44,7 @@ async def test_enqueue_document_embedding_write(db_writer):
             document_hash="doc_hash",
             filename="file",
             mimetype="text",
-            file_hash="file_hash",
+            document_file_hash="document_file_hash",
             llm_model_name="model",
             file_data=b"data",
             document_embedding_results_json={},

@@ -37,9 +37,9 @@ class TextEmbedding(Base, SerializerMixin):
     request_time = Column(DateTime)
     response_time = Column(DateTime)
     total_time = Column(Float)
-    document_file_hash = Column(String, ForeignKey('document_embeddings.file_hash'))
+    document_file_hash = Column(String, ForeignKey('document_embeddings.document_file_hash'))
     document = relationship("DocumentEmbedding", back_populates="embeddings", foreign_keys=[document_file_hash, corpus_identifier_string])
-    __table_args__ = (UniqueConstraint('text_hash', 'llm_model_name', name='_text_hash_model_uc'),)
+    __table_args__ = (UniqueConstraint('embedding_hash', name='_embedding_hash_uc'),)
 
 class DocumentEmbedding(Base):
     __tablename__ = "document_embeddings"
@@ -47,7 +47,7 @@ class DocumentEmbedding(Base):
     document_hash = Column(String, ForeignKey('documents.document_hash'))
     filename = Column(String)
     mimetype = Column(String)
-    file_hash = Column(String, index=True)
+    document_file_hash = Column(String, index=True)
     embedding_pooling_method = Column(String, index=True)
     llm_model_name = Column(String, index=True)
     corpus_identifier_string = Column(String, index=True)
@@ -59,7 +59,7 @@ class DocumentEmbedding(Base):
     response_time = Column(DateTime)
     total_time = Column(Float)
     embeddings = relationship("TextEmbedding", back_populates="document", foreign_keys=[TextEmbedding.document_file_hash])
-    __table_args__ = (UniqueConstraint('file_hash', 'llm_model_name', 'corpus_identifier_string', name='_file_hash_model_corpus_uc'),)
+    __table_args__ = (UniqueConstraint('document_embedding_results_json_compressed_binary', name='_document_embedding_results_json_compressed_binary_uc'),)
     document = relationship("Document", back_populates="document_embeddings", foreign_keys=[document_hash])
 
 class Document(Base):
@@ -116,11 +116,18 @@ class SemanticSearchResponse(BaseModel):
 class AdvancedSemanticSearchRequest(BaseModel):
     query_text: str
     llm_model_name: str = DEFAULT_MODEL_NAME
-    embedding_pooling_method: str = "means"
+    embedding_pooling_method: str = "svd"
     corpus_identifier_string: str
-    similarity_filter_percentage: float = 0.98
+    similarity_filter_percentage: float = 0.01
     number_of_most_similar_strings_to_return: Optional[int] = None
-
+    result_sorting_metric: str = "hoeffding_d"
+    @field_validator('result_sorting_metric')
+    def validate_similarity_measure(cls, value):
+        valid_measures = ["all", "spearman_rho", "kendall_tau", "approximate_distance_correlation", "jensen_shannon_similarity", "hoeffding_d"]
+        if value.lower() not in valid_measures:
+            raise ValueError(f"Invalid similarity measure. Supported measures are: {', '.join(valid_measures)}")
+        return value.lower()
+    
 class AdvancedSemanticSearchResponse(BaseModel):
     query_text: str
     corpus_identifier_string: str
@@ -203,7 +210,11 @@ class AudioTranscriptResponse(BaseModel):
     request_time: datetime
     response_time: datetime
     total_time: float
-
+    url_to_download_zip_file_of_embeddings: str
+    llm_model_name: str
+    embedding_pooling_method: str
+    corpus_identifier_string: str
+    
 class ShowLogsIncrementalModel(BaseModel):
     logs: str
     last_position: int

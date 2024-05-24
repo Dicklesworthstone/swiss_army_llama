@@ -9,7 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError, OperationalError, IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from decouple import config
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = setup_logger()
 db_writer = None
@@ -18,6 +18,7 @@ MAX_RETRIES = config("MAX_RETRIES", default=3, cast=int)
 DB_WRITE_BATCH_SIZE = config("DB_WRITE_BATCH_SIZE", default=25, cast=int) 
 RETRY_DELAY_BASE_SECONDS = config("RETRY_DELAY_BASE_SECONDS", default=1, cast=int)
 JITTER_FACTOR = config("JITTER_FACTOR", default=0.1, cast=float)
+TIME_IN_DAYS_BEFORE_RECORDS_ARE_PURGED = config("TIME_IN_DAYS_BEFORE_RECORDS_ARE_PURGED", default=2, cast=int)
 
 engine = create_async_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
 AsyncSessionLocal = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False, autoflush=False)
@@ -40,9 +41,9 @@ class DatabaseWriter:
 
     def _get_hash_from_operation(self, operation):
         if isinstance(operation, TextEmbedding):
-            return f"{operation.text_hash}_{operation.llm_model_name}"
+            return f"{operation.embedding_hash}"
         elif isinstance(operation, DocumentEmbedding):
-            return f"{operation.file_hash}_{operation.llm_model_name}_{operation.corpus_identifier_string}"
+            return f"{operation.document_embedding_results_json_compressed_binary}"
         elif isinstance(operation, Document):
             return operation.document_hash
         elif isinstance(operation, AudioTranscript):
@@ -53,8 +54,8 @@ class DatabaseWriter:
         start_time = datetime.utcnow()
         async with AsyncSessionLocal() as session:
             queries = [
-                (select(TextEmbedding.text_hash, TextEmbedding.llm_model_name), TextEmbedding),
-                (select(DocumentEmbedding.file_hash, DocumentEmbedding.llm_model_name, DocumentEmbedding.corpus_identifier_string), DocumentEmbedding),
+                (select(TextEmbedding.embedding_hash), TextEmbedding),
+                (select(DocumentEmbedding.document_embedding_results_json_compressed_binary), DocumentEmbedding),
                 (select(Document.document_hash), Document),
                 (select(AudioTranscript.audio_file_hash), AudioTranscript)
             ]
@@ -66,10 +67,10 @@ class DatabaseWriter:
                     if not rows:
                         break
                     for row in rows:
-                        if model_class in [TextEmbedding]:
-                            hash_with_model = f"{row[0]}_{row[1]}"
-                        elif model_class in [DocumentEmbedding]:
-                            hash_with_model = f"{row[0]}_{row[1]}_{row[2]}"
+                        if model_class == TextEmbedding:
+                            hash_with_model = row[0]
+                        elif model_class == DocumentEmbedding:
+                            hash_with_model = row[0]
                         elif model_class == Document:
                             hash_with_model = row[0]
                         elif model_class == AudioTranscript:
@@ -84,15 +85,15 @@ class DatabaseWriter:
     async def _record_exists(self, session, operation):
         model_class = type(operation)
         if model_class == TextEmbedding:
-            return await session.execute(select(exists().where(TextEmbedding.text_hash == operation.text_hash).where(TextEmbedding.llm_model_name == operation.llm_model_name)))
+            return await session.execute(select(exists().where(TextEmbedding.embedding_hash == operation.embedding_hash)))
         elif model_class == DocumentEmbedding:
-            return await session.execute(select(exists().where(DocumentEmbedding.file_hash == operation.file_hash).where(DocumentEmbedding.llm_model_name == operation.llm_model_name).where(DocumentEmbedding.corpus_identifier_string == operation.corpus_identifier_string)))
+            return await session.execute(select(exists().where(DocumentEmbedding.document_embedding_results_json_compressed_binary == operation.document_embedding_results_json_compressed_binary)))
         elif model_class == Document:
             return await session.execute(select(exists().where(Document.document_hash == operation.document_hash)))
         elif model_class == AudioTranscript:
             return await session.execute(select(exists().where(AudioTranscript.audio_file_hash == operation.audio_file_hash)))
         return None
-    
+
     async def dedicated_db_writer(self):
         while True:
             write_operations_batch = await self.queue.get()
@@ -149,16 +150,16 @@ class DatabaseWriter:
 
     async def _handle_integrity_error(self, e, write_operation, session):
         unique_constraint_msg = {
-            TextEmbedding: "embeddings.text_hash, embeddings.llm_model_name",
-            DocumentEmbedding: "document_embeddings.file_hash, document_embeddings.llm_model_name",
-            Document: "documents.document_hash, documents.llm_model_name",
+            TextEmbedding: "embeddings.embedding_hash",
+            DocumentEmbedding: "document_embeddings.document_embedding_results_json_compressed_binary",
+            Document: "documents.document_hash",
             AudioTranscript: "audio_transcripts.audio_file_hash"
         }.get(type(write_operation))
         if unique_constraint_msg and unique_constraint_msg in str(e):
-            logger.warning(f"Embedding already exists in the database for given input and llm_model_name: {e}")
+            logger.warning(f"Embedding already exists in the database for given input: {e}")
             await self._update_existing_record(session, write_operation)
         else:
-            raise
+            raise        
 
     async def enqueue_write(self, write_operations):
         write_operations = [op for op in write_operations if self._get_hash_from_operation(op) not in self.processing_hashes]
@@ -218,15 +219,17 @@ async def initialize_db(use_verbose = 0):
 def get_db_writer() -> DatabaseWriter:
     return db_writer  # Return the existing DatabaseWriter instance
 
-# def delete_expired_rows(session_factory):
-#     async def async_delete_expired_rows():
-#         async with session_factory() as session:
-#             expiration_time = datetime.utcnow() - timedelta(hours=48)
-#             expired_rows = await session.execute(
-#                 select(TokenLevelEmbeddingBundle).where(TokenLevelEmbeddingBundle.created_at < expiration_time)
-#             )
-#             expired_rows = expired_rows.scalars().all()
-#             for row in expired_rows:
-#                 await session.delete(row)
-#             await session.commit()
-#     return async_delete_expired_rows
+def delete_expired_rows(session_factory):
+    async def async_delete_expired_rows():
+        async with session_factory() as session:
+            expiration_time = datetime.utcnow() - timedelta(days=TIME_IN_DAYS_BEFORE_RECORDS_ARE_PURGED)
+            models = [TextEmbedding, DocumentEmbedding, Document, AudioTranscript]
+            for model in models:
+                expired_rows = await session.execute(
+                    select(model).where(model.created_at < expiration_time)
+                )
+                expired_rows = expired_rows.scalars().all()
+                for row in expired_rows:
+                    await session.delete(row)
+            await session.commit()
+    return async_delete_expired_rows
