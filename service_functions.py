@@ -38,7 +38,9 @@ from llama_cpp import llama_types
 from mutagen import File as MutagenFile
 from magika import Magika
 import httpx
-from sklearn.decomposition import TruncatedSVD
+from sklearn.decomposition import PCA, TruncatedSVD, FastICA, FactorAnalysis, NMF
+from sklearn.random_projection import GaussianRandomProjection
+from numpy.linalg import qr, cholesky
 
 logger = setup_logger()
 magika = Magika()
@@ -257,6 +259,9 @@ async def get_or_compute_embedding(request: EmbeddingRequest, req: Request = Non
     return {"text_embedding_dict": embedding_instance.as_dict()}
 
 async def calculate_sentence_embeddings_list(llama, texts: list, embedding_pooling_method: str) -> list:
+    start_time = datetime.utcnow()
+    total_number_of_sentences = len(texts)
+    total_characters = sum(len(s) for s in texts)
     sentence_embeddings_object = llama.create_embedding(texts)
     sentence_embeddings_list = sentence_embeddings_object['data']
     if len(sentence_embeddings_list) != len(texts):
@@ -273,6 +278,7 @@ async def calculate_sentence_embeddings_list(llama, texts: list, embedding_pooli
             current_set_of_embeddings = [current_set_of_embeddings]
         logger.info(f"Sentence {i + 1} of {len(texts):,} has {number_of_embeddings:,} embeddings for text '{current_text[:50]}...'")
         embeddings = np.array(current_set_of_embeddings)
+        dimension_of_token_embeddings = embeddings.shape[1]
         if embedding_pooling_method == "means":
             means = np.mean(embeddings, axis=0)
             flattened_vector = means.flatten()
@@ -303,6 +309,44 @@ async def calculate_sentence_embeddings_list(llama, texts: list, embedding_pooli
                 svd = TruncatedSVD(n_components=2)  # Set n_components to 2
                 svd_embeddings = svd.fit_transform(embeddings.T)
                 flattened_vector = svd_embeddings.flatten()
+        elif embedding_pooling_method == "svd_first_four":
+                svd = TruncatedSVD(n_components=4)  # Set n_components to 4
+                svd_embeddings = svd.fit_transform(embeddings.T)
+                flattened_vector = svd_embeddings.flatten()
+        elif embedding_pooling_method == "covariance_matrix":
+            covariance_matrix = np.cov(embeddings, rowvar=False)
+            eigenvalues, eigenvectors = np.linalg.eigh(covariance_matrix)
+            flattened_vector = np.concatenate([eigenvalues, eigenvectors.flatten()]).flatten()
+        elif embedding_pooling_method == "frobenius_norm":
+            flattened_vector = np.array([np.linalg.norm(embeddings, 'fro')])
+        elif embedding_pooling_method == "gram_matrix":
+            gram_matrix = np.dot(embeddings, embeddings.T)
+            flattened_vector = gram_matrix.flatten()
+        elif embedding_pooling_method == "qr_decomposition":
+            q, r = qr(embeddings)
+            flattened_vector = np.concatenate([q.flatten(), r.flatten()]).flatten()
+        elif embedding_pooling_method == "cholesky_decomposition":
+            try:
+                cholesky_matrix = cholesky(np.cov(embeddings, rowvar=False))
+                flattened_vector = cholesky_matrix.flatten()
+            except np.linalg.LinAlgError:
+                flattened_vector = np.zeros((embeddings.shape[1] * embeddings.shape[1],))
+        elif embedding_pooling_method == "ica":
+            ica = FastICA(n_components=2)
+            ica_embeddings = ica.fit_transform(embeddings)
+            flattened_vector = ica_embeddings.flatten()
+        elif embedding_pooling_method == "nmf":
+            nmf = NMF(n_components=2)
+            nmf_embeddings = nmf.fit_transform(embeddings)
+            flattened_vector = nmf_embeddings.flatten()
+        elif embedding_pooling_method == "factor_analysis":
+            fa = FactorAnalysis(n_components=2)
+            fa_embeddings = fa.fit_transform(embeddings)
+            flattened_vector = fa_embeddings.flatten()           
+        elif embedding_pooling_method == "gaussian_random_projection":
+            grp = GaussianRandomProjection(n_components=2)
+            grp_embeddings = grp.fit_transform(embeddings)
+            flattened_vector = grp_embeddings.flatten()                 
         else:
             raise ValueError(f"Unknown embedding_pooling_method: {embedding_pooling_method}")
         combined_embedding = flattened_vector.tolist()
@@ -312,6 +356,10 @@ async def calculate_sentence_embeddings_list(llama, texts: list, embedding_pooli
         embedding_hash = sha3_256(embedding_json.encode('utf-8')).hexdigest()
         embedding_entry_dict = {'text_index': i, 'text': current_text, 'embedding_pooling_method': embedding_pooling_method,'number_of_token_embeddings_used': number_of_embeddings, 'embedding_length': embedding_length, 'embedding_hash': embedding_hash,'embedding': combined_embedding}
         list_of_embedding_entry_dicts.append(embedding_entry_dict)
+    end_time = datetime.utcnow()
+    total_time = (end_time - start_time).total_seconds()
+    logger.info(f"Calculated {len(flattened_vector):,}-dimensional embeddings (relative to the underlying token embedding dimensions of {dimension_of_token_embeddings}:,) for {total_number_of_sentences:,} sentences in a total of {total_time:,.1f} seconds.") 
+    logger.info(f"That's an average of {1000*total_time/total_number_of_sentences:,.1f} ms per sentence and {total_number_of_sentences/total_time:,.1f} sentences per second (and {total_characters/(1000*total_time):,.1f} total characters per ms) using pooling method {embedding_pooling_method}")
     return list_of_embedding_entry_dicts
 
 async def batch_save_embeddings_to_db(embeddings: List[TextEmbedding]):
@@ -412,7 +460,7 @@ async def parse_submitted_document_file_into_sentence_strings_func(temp_file_pat
         logger.info("No sentences found in the document")
         raise HTTPException(status_code=400, detail="No sentences found in the document")
     strings = [s.strip() for s in sentences if len(s.strip()) > MINIMUM_STRING_LENGTH_FOR_DOCUMENT_EMBEDDING]
-    thousands_of_input_words = sum(len(s.split()) for s in strings)
+    thousands_of_input_words = round(sum(len(s.split()) for s in strings) / 1000, 2)
     return strings, thousands_of_input_words
 
 async def _get_document_from_db(document_file_hash: str):

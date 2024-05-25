@@ -85,14 +85,14 @@ def update_document_hash_on_remove(target, value, initiator):
 class EmbeddingRequest(BaseModel):
     text: str
     llm_model_name: Optional[str] = DEFAULT_MODEL_NAME
-    embedding_pooling_method: str = "means"
+    embedding_pooling_method: str = "svd"
     corpus_identifier_string: Optional[str] = ""
 
 class SimilarityRequest(BaseModel):
     text1: str
     text2: str
     llm_model_name: Optional[str] = DEFAULT_MODEL_NAME
-    embedding_pooling_method: str = "means"
+    embedding_pooling_method: str = "svd"
     similarity_measure: Optional[str] = "all"
     @field_validator('similarity_measure')
     def validate_similarity_measure(cls, value):
@@ -105,13 +105,13 @@ class SemanticSearchRequest(BaseModel):
     query_text: str
     number_of_most_similar_strings_to_return: int = 10
     llm_model_name: str = DEFAULT_MODEL_NAME
-    embedding_pooling_method: str = "means"
+    embedding_pooling_method: str = "svd"
     corpus_identifier_string: str = ""
         
 class SemanticSearchResponse(BaseModel):
     query_text: str
     corpus_identifier_string: str
-    embedding_pooling_method: str = "means"
+    embedding_pooling_method: str
     results: List[dict]  # List of similar strings and their similarity scores using cosine similarity with Faiss (in descending order)
 
 class AdvancedSemanticSearchRequest(BaseModel):
@@ -132,7 +132,7 @@ class AdvancedSemanticSearchRequest(BaseModel):
 class AdvancedSemanticSearchResponse(BaseModel):
     query_text: str
     corpus_identifier_string: str
-    embedding_pooling_method: str = "means"
+    embedding_pooling_method: str
     results: List[Dict[str, Union[str, float, Dict[str, float]]]]
 
 class EmbeddingResponse(BaseModel):
@@ -155,7 +155,7 @@ class SimilarityResponse(BaseModel):
     text1: str
     text2: str
     similarity_measure: str
-    embedding_pooling_method: str = "means"
+    embedding_pooling_method: str
     similarity_score: Union[float, Dict[str, float]]  # Now can be either a float or a dictionary
     embedding1: List[float]
     embedding2: List[float]
