@@ -10,11 +10,20 @@ The Swiss Army Llama is designed to facilitate and optimize the process of worki
 
 Some additional useful endpoints are provided, such as computing semantic similarity between submitted text strings. The service leverages a high-performance Rust-based library, `fast_vector_similarity`, to offer a range of similarity measures including `spearman_rho`, `kendall_tau`, `approximate_distance_correlation`, `jensen_shannon_similarity`, and [`hoeffding_d`](https://blogs.sas.com/content/iml/2021/05/03/examples-hoeffding-d.html). Additionally, semantic search across all your cached embeddings is supported using FAISS vector searching. You can either use the built in cosine similarity from FAISS, or supplement this with a second pass that computes the more sophisticated similarity measures for the most relevant subset of the stored vectors found using cosine similarity (see the advanced semantic search endpoint for this functionality).
 
-Also, we now supports multiple embedding pooling methods for combining token-level embedding vectors into a single fixed-length embedding vector for any length of input text, including the following:
+Also, we now support multiple embedding pooling methods for combining token-level embedding vectors into a single fixed-length embedding vector for any length of input text, including the following:
    - `means`: Element-wise average of the token embeddings.
    - `means_mins_maxes`: Concatenation of element-wise mean, min, and max of the token embeddings.
    - `means_mins_maxes_stds_kurtoses`: Concatenation of element-wise mean, min, max, standard deviation, and kurtosis of the token embeddings.
    - `svd`: Concatenation of the first two singular vectors obtained from the Singular Value Decomposition (SVD) of the token embeddings matrix.
+   - `svd_first_four`: Concatenation of the first four singular vectors obtained from the Singular Value Decomposition (SVD) of the token embeddings matrix.
+   - `gram_matrix`: Flattened Gram matrix (dot product of the token embeddings matrix with its transpose).
+   - `qr_decomposition`: Concatenation of the flattened Q and R matrices from QR decomposition of the token embeddings.
+   - `cholesky_decomposition`: Flattened lower triangular matrix from Cholesky decomposition of the covariance matrix of the token embeddings.
+   - `ica`: Flattened independent components obtained from Independent Component Analysis (ICA) of the token embeddings.
+   - `nmf`: Flattened components obtained from Non-Negative Matrix Factorization (NMF) of the token embeddings.
+   - `factor_analysis`: Flattened factors obtained from Factor Analysis of the token embeddings.
+   - `gaussian_random_projection`: Flattened embeddings obtained from Gaussian Random Projection of the token embeddings.
+
 
 As mentioned above, you can now submit not only plaintext and fully digital PDFs but also MS Word documents, images, and other file types supported by the textract library. The library can automatically apply OCR using Tesseract for scanned text. The returned embeddings for each sentence in a document can be organized in various formats like records, table, etc., using the Pandas to_json() function. The results can be returned either as a ZIP file containing a JSON file or as a direct JSON response. You can now also submit audio files in MP3 or WAV formats. The library uses OpenAI's Whisper model, as optimized by the Faster Whisper Python library, to transcribe the audio into text. Optionally, this transcript can be treated like any other document, with each sentence's embeddings computed and stored. The results are returned as a URL to a downloadable ZIP file containing a JSON with the embedding vector data.
 
@@ -252,13 +261,17 @@ The application uses a SQLite database via SQLAlchemy ORM. Here are the data mod
 - `id`: Primary Key
 - `text`: Text for which the embedding was computed
 - `text_hash`: Hash of the text, computed using SHA3-256
+- `embedding_pooling_method`: The method used to pool the embeddings
+- `embedding_hash`: Hash of the computed embedding
 - `llm_model_name`: Model used to compute the embedding
+- `corpus_identifier_string`: An optional string identifier for grouping embeddings into a specific corpus
 - `embedding_json`: The computed embedding in JSON format
 - `ip_address`: Client IP address
 - `request_time`: Timestamp of the request
 - `response_time`: Timestamp of the response
 - `total_time`: Total time taken to process the request
 - `document_file_hash`: Foreign Key referencing the DocumentEmbedding table
+- `document`: Relationship with DocumentEmbedding
 
 ### DocumentEmbedding Table
 
@@ -267,15 +280,26 @@ The application uses a SQLite database via SQLAlchemy ORM. Here are the data mod
 - `filename`: Name of the document file
 - `mimetype`: MIME type of the document file
 - `document_file_hash`: Hash of the file
+- `embedding_pooling_method`: The method used to pool the embeddings
 - `llm_model_name`: Model used to compute the embedding
+- `corpus_identifier_string`: An optional string identifier for grouping documents into a specific corpus
 - `file_data`: Binary data of the original file
+- `sentences`: The extracted sentences from the document
 - `document_embedding_results_json_compressed_binary`: The computed embedding results in JSON format compressed with Z-standard compression
+- `ip_address`: Client IP address
+- `request_time`: Timestamp of the request
+- `response_time`: Timestamp of the response
+- `total_time`: Total time taken to process the request
+- `embeddings`: Relationship with TextEmbedding
+- `document`: Relationship with Document
 
 ### Document Table
 
 - `id`: Primary Key
 - `llm_model_name`: Model name associated with the document
+- `corpus_identifier_string`: An optional string identifier for grouping documents into a specific corpus
 - `document_hash`: Computed Hash of the document
+- `document_embeddings`: Relationship with DocumentEmbedding
 
 ### AudioTranscript Table
 
@@ -284,7 +308,13 @@ The application uses a SQLite database via SQLAlchemy ORM. Here are the data mod
 - `audio_file_size_mb`: File size in MB
 - `segments_json`: Transcribed segments as JSON
 - `combined_transcript_text`: Combined transcript text
+- `combined_transcript_text_list_of_metadata_dicts`: List of metadata dictionaries for each segment of the combined transcript
 - `info_json`: Transcription info as JSON
+- `ip_address`: Client IP address
+- `request_time`: Timestamp of the request
+- `response_time`: Timestamp of the response
+- `total_time`: Total time taken to process the request
+- `corpus_identifier_string`: An optional string identifier for grouping transcripts into a specific corpus
 
 ### Database Relationships
 
@@ -297,11 +327,30 @@ The application uses a SQLite database via SQLAlchemy ORM. Here are the data mod
    - This establishes a one-to-many relationship between `Document` and `DocumentEmbedding`.
 
 3. **AudioTranscript**:  
-   - This table doesn't seem to have a direct relationship with other tables based on the given code.
+   - This table doesn't have a direct relationship with other tables based on the given code.
 
 4. **Request/Response Models**:  
    - These are not directly related to the database tables but are used for handling API requests and responses.
+   - The following Pydantic models are used for request and response validation:
+     - EmbeddingRequest
+     - SimilarityRequest
+     - SemanticSearchRequest
+     - SemanticSearchResponse
+     - AdvancedSemanticSearchRequest
+     - AdvancedSemanticSearchResponse
+     - EmbeddingResponse
+     - SimilarityResponse
+     - AllStringsResponse
+     - AllDocumentsResponse
+     - TextCompletionRequest
+     - TextCompletionResponse
+     - ImageQuestionResponse
+     - AudioTranscriptResponse
+     - ShowLogsIncrementalModel
+     - AddGrammarRequest
+     - AddGrammarResponse
 
+For detailed field descriptions and validations, please refer to the `embeddings_data_models.py` file.
 
 ## Performance Optimizations
 
@@ -441,6 +490,7 @@ Note:
 ---
 
 ## Endpoint Functionality and Workflow Overview
+
 Here's a detailed breakdown of the main endpoints provided by the FastAPI server, explaining their functionality, input parameters, and how they interact with underlying models and systems:
 
 ### 1. `/get_embedding_vector_for_string/` (POST)
@@ -514,6 +564,7 @@ Performs a two-step advanced semantic search. Utilizes FAISS and cosine similari
   "number_of_most_similar_strings_to_return": 5
 }
 ```
+
 ### 5. `/get_all_embedding_vectors_for_document/` (POST)
 
 #### Purpose
@@ -525,7 +576,6 @@ Extract text embeddings for a document. The library now supports a wide range of
 - `json_format`: (Optional) The format of the JSON response.
 - `send_back_json_or_zip_file`: Whether to return a JSON file or a ZIP file containing the embeddings file (optional, defaults to `zip`).
 - `token`: Security token (optional).
-
 
 ### 6. `/compute_transcript_with_whisper_from_audio/` (POST)
 
@@ -618,7 +668,6 @@ Clear the RAM Disk to free up memory.
 #### Parameters
 - `token`: Security token (optional).
 
-
 ### 12. `/download/{file_name}` (GET)
 
 #### Purpose
@@ -635,3 +684,60 @@ Submit a new model URL for download and use. The model must be in `.gguf` format
 #### Parameters
 - `model_url`: The URL of the model weight file, which must end with `.gguf`.
 - `token`: Security token (optional).
+
+
+### Token-Level Embedding Vector Pooling
+
+Pooling methods are designed to aggregate token-level embeddings, which are typically variable in length due to differing numbers of tokens in sentences or documents. By converting these token-level embeddings into a single, fixed-length vector, we ensure that each input text is represented consistently, regardless of its length. This fixed-length vector can then be used in various machine learning models that require inputs of a consistent size. 
+
+The primary goal of these pooling methods is to retain as much useful information as possible from the original token-level embeddings while ensuring that the transformation is deterministic and does not distort the data. Each method achieves this by applying different statistical or mathematical techniques to summarize the token embeddings.
+
+#### Explanation of Pooling Methods
+
+1. **Means**:
+   - **How it works**: Computes the element-wise average of the token embeddings.
+   - **Rationale**: The mean pooling method provides a simple yet effective way to summarize the central tendency of the token embeddings, capturing the overall semantic content of the text.
+
+2. **Means_Mins_Maxes**:
+   - **How it works**: Concatenates the element-wise mean, min, and max of the token embeddings.
+   - **Rationale**: This method captures the central tendency (mean) as well as the range (min and max) of the embeddings, providing a richer representation by considering the distribution of values.
+
+3. **Means_Mins_Maxes_Stds_Kurtoses**:
+   - **How it works**: Concatenates the element-wise mean, min, max, standard deviation, and kurtosis of the token embeddings.
+   - **Rationale**: This method captures various statistical properties of the embeddings, including their central tendency, variability, and distribution shape, offering a comprehensive summary of the token embeddings.
+
+4. **SVD (Singular Value Decomposition)**:
+   - **How it works**: Concatenates the first two singular vectors obtained from the SVD of the token embeddings matrix.
+   - **Rationale**: SVD is a dimensionality reduction technique that captures the most important features of the data. Using the first two singular vectors provides a compact representation that retains significant information.
+
+5. **SVD_First_Four**:
+   - **How it works**: Uses the first four singular vectors obtained from the SVD of the token embeddings matrix.
+   - **Rationale**: By using more singular vectors, this method captures more of the variance in the data, providing a richer representation while still reducing dimensionality.
+
+6. **Gram_Matrix**:
+   - **How it works**: Computes the Gram matrix (dot product of the embeddings matrix with its transpose) and flattens it.
+   - **Rationale**: The Gram matrix captures the pairwise similarities between token embeddings, providing a summary of their relationships.
+
+7. **QR_Decomposition**:
+   - **How it works**: Performs QR decomposition on the embeddings matrix and concatenates the flattened Q and R matrices.
+   - **Rationale**: QR decomposition provides an orthogonal basis (Q) and upper triangular matrix (R), summarizing the embeddings in terms of these basis vectors and their coefficients.
+
+8. **Cholesky_Decomposition**:
+    - **How it works**: Performs Cholesky decomposition on the covariance matrix of the embeddings and flattens the resulting matrix.
+    - **Rationale**: This method factors the covariance matrix into a lower triangular matrix, capturing the structure of the variance in the embeddings.
+
+9. **ICA (Independent Component Analysis)**:
+    - **How it works**: Applies ICA to the embeddings matrix to find statistically independent components, then flattens the result.
+    - **Rationale**: ICA is useful for identifying independent sources in the data, providing a representation that highlights these independent features.
+
+10. **NMF (Non-Negative Matrix Factorization)**:
+    - **How it works**: Applies NMF to the embeddings matrix and flattens the result.
+    - **Rationale**: NMF finds parts-based representations by factorizing the data into non-negative components, useful for interpretability and feature extraction.
+
+11. **Factor_Analysis**:
+    - **How it works**: Applies factor analysis to the embeddings matrix to identify underlying factors, then flattens the result.
+    - **Rationale**: Factor analysis models the data in terms of latent factors, providing a summary that captures these underlying influences.
+
+12. **Gaussian_Random_Projection**:
+    - **How it works**: Applies Gaussian random projection to reduce the dimensionality of the embeddings, then flattens the result.
+    - **Rationale**: This method provides a fast and efficient way to reduce dimensionality while preserving the pairwise distances between points, useful for large datasets.

@@ -38,7 +38,8 @@ from llama_cpp import llama_types
 from mutagen import File as MutagenFile
 from magika import Magika
 import httpx
-from sklearn.decomposition import PCA, TruncatedSVD, FastICA, FactorAnalysis, NMF
+from sklearn.decomposition import TruncatedSVD, FastICA, FactorAnalysis, NMF
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.random_projection import GaussianRandomProjection
 from numpy.linalg import qr, cholesky
 
@@ -314,38 +315,38 @@ async def calculate_sentence_embeddings_list(llama, texts: list, embedding_pooli
                 svd_embeddings = svd.fit_transform(embeddings.T)
                 flattened_vector = svd_embeddings.flatten()
         elif embedding_pooling_method == "covariance_matrix":
-            covariance_matrix = np.cov(embeddings, rowvar=False)
+            covariance_matrix = np.cov(embeddings.T, rowvar=False)
             eigenvalues, eigenvectors = np.linalg.eigh(covariance_matrix)
             flattened_vector = np.concatenate([eigenvalues, eigenvectors.flatten()]).flatten()
-        elif embedding_pooling_method == "frobenius_norm":
-            flattened_vector = np.array([np.linalg.norm(embeddings, 'fro')])
         elif embedding_pooling_method == "gram_matrix":
             gram_matrix = np.dot(embeddings, embeddings.T)
             flattened_vector = gram_matrix.flatten()
         elif embedding_pooling_method == "qr_decomposition":
-            q, r = qr(embeddings)
+            q, r = qr(embeddings.T)
             flattened_vector = np.concatenate([q.flatten(), r.flatten()]).flatten()
         elif embedding_pooling_method == "cholesky_decomposition":
             try:
-                cholesky_matrix = cholesky(np.cov(embeddings, rowvar=False))
+                cholesky_matrix = cholesky(np.cov(embeddings.T, rowvar=False))
                 flattened_vector = cholesky_matrix.flatten()
             except np.linalg.LinAlgError:
                 flattened_vector = np.zeros((embeddings.shape[1] * embeddings.shape[1],))
         elif embedding_pooling_method == "ica":
             ica = FastICA(n_components=2)
-            ica_embeddings = ica.fit_transform(embeddings)
+            ica_embeddings = ica.fit_transform(embeddings.T)
             flattened_vector = ica_embeddings.flatten()
         elif embedding_pooling_method == "nmf":
+            scaler = MinMaxScaler()
+            scaled_embeddings = scaler.fit_transform(embeddings.T)
             nmf = NMF(n_components=2)
-            nmf_embeddings = nmf.fit_transform(embeddings)
+            nmf_embeddings = nmf.fit_transform(scaled_embeddings)
             flattened_vector = nmf_embeddings.flatten()
         elif embedding_pooling_method == "factor_analysis":
             fa = FactorAnalysis(n_components=2)
-            fa_embeddings = fa.fit_transform(embeddings)
+            fa_embeddings = fa.fit_transform(embeddings.T)
             flattened_vector = fa_embeddings.flatten()           
         elif embedding_pooling_method == "gaussian_random_projection":
             grp = GaussianRandomProjection(n_components=2)
-            grp_embeddings = grp.fit_transform(embeddings)
+            grp_embeddings = grp.fit_transform(embeddings.T)
             flattened_vector = grp_embeddings.flatten()                 
         else:
             raise ValueError(f"Unknown embedding_pooling_method: {embedding_pooling_method}")
@@ -358,8 +359,8 @@ async def calculate_sentence_embeddings_list(llama, texts: list, embedding_pooli
         list_of_embedding_entry_dicts.append(embedding_entry_dict)
     end_time = datetime.utcnow()
     total_time = (end_time - start_time).total_seconds()
-    logger.info(f"Calculated {len(flattened_vector):,}-dimensional embeddings (relative to the underlying token embedding dimensions of {dimension_of_token_embeddings}:,) for {total_number_of_sentences:,} sentences in a total of {total_time:,.1f} seconds.") 
-    logger.info(f"That's an average of {1000*total_time/total_number_of_sentences:,.1f} ms per sentence and {total_number_of_sentences/total_time:,.1f} sentences per second (and {total_characters/(1000*total_time):,.1f} total characters per ms) using pooling method {embedding_pooling_method}")
+    logger.info(f"Calculated {len(flattened_vector):,}-dimensional embeddings (relative to the underlying token embedding dimensions of {dimension_of_token_embeddings:,}) for {total_number_of_sentences:,} sentences in a total of {total_time:,.1f} seconds.") 
+    logger.info(f"That's an average of {1000*total_time/total_number_of_sentences:,.2f} ms per sentence and {total_number_of_sentences/total_time:,.3f} sentences per second (and {total_characters/(1000*total_time):,.4f} total characters per ms) using pooling method '{embedding_pooling_method}'")
     return list_of_embedding_entry_dicts
 
 async def batch_save_embeddings_to_db(embeddings: List[TextEmbedding]):
