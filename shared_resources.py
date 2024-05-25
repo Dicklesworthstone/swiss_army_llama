@@ -10,6 +10,7 @@ import os
 import nvgpu
 import glob
 import json
+from filelock import FileLock, Timeout
 import traceback
 import llama_cpp
 from typing import List, Tuple, Dict
@@ -143,30 +144,37 @@ def download_models() -> Tuple[List[str], List[Dict[str, str]]]:
         logger.info(f"Created models directory: {models_dir}")
     else:
         logger.info(f"Models directory exists: {models_dir}")
+    lock = FileLock(os.path.join(models_dir, "download.lock"))
     for url, model_name_with_extension in zip(list_of_model_download_urls, model_names):
         status = {"url": url, "status": "success", "message": "File already exists."}
         filename = os.path.join(models_dir, model_name_with_extension)
-        if not os.path.exists(filename):
-            logger.info(f"Downloading model {model_name_with_extension} from {url}...")
-            urllib.request.urlretrieve(url, filename)
-            file_size = os.path.getsize(filename) / (1024 * 1024)  # Convert bytes to MB
-            if file_size < 100:
-                os.remove(filename)
-                status["status"] = "failure"
-                status["message"] = "Downloaded file is too small, probably not a valid model file."
-            else:
-                logger.info(f"Downloaded: {filename}")     
-        else:
-            logger.info(f"File already exists: {filename}")       
+        try:
+            with lock.acquire(timeout=1200): # Wait up to 20 minutes for the file to be downloaded before returning failure
+                if not os.path.exists(filename):
+                    logger.info(f"Downloading model {model_name_with_extension} from {url}...")
+                    urllib.request.urlretrieve(url, filename)
+                    file_size = os.path.getsize(filename) / (1024 * 1024)  # Convert bytes to MB
+                    if file_size < 100:
+                        os.remove(filename)
+                        status["status"] = "failure"
+                        status["message"] = "Downloaded file is too small, probably not a valid model file."
+                    else:
+                        logger.info(f"Downloaded: {filename}")
+                else:
+                    logger.info(f"File already exists: {filename}")
+        except Timeout:
+            logger.warning(f"Could not acquire lock for downloading {model_name_with_extension}")
+            status["status"] = "failure"
+            status["message"] = "Could not acquire lock for downloading."
         download_status.append(status)
     if USE_RAMDISK:
         copy_models_to_ramdisk(models_dir, ramdisk_models_dir)
     logger.info("Model downloads completed.")
     return model_names, download_status
 
-
 def load_model(llm_model_name: str, raise_http_exception: bool = True):
     global USE_VERBOSE
+    model_instance = None
     try:
         models_dir = os.path.join(RAMDISK_PATH, 'models') if USE_RAMDISK else os.path.join(BASE_DIRECTORY, 'models')
         if llm_model_name in embedding_model_cache:
@@ -178,13 +186,16 @@ def load_model(llm_model_name: str, raise_http_exception: bool = True):
         matching_files.sort(key=os.path.getmtime, reverse=True)
         model_file_path = matching_files[0]
         gpu_info = is_gpu_available()
-        if gpu_info['gpu_found']:
-            model_instance = llama_cpp.Llama(model_path=model_file_path, embedding=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, verbose=USE_VERBOSE, n_gpu_layers=-1) # Load the model with GPU acceleration
+        if 'llava' in llm_model_name:
+            is_llava_multimodal_model = 1
         else:
-            model_instance = llama_cpp.Llama(model_path=model_file_path, embedding=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, verbose=USE_VERBOSE) # Load the model without GPU acceleration        
-        # with suppress_stdout_stderr():
-            # model_instance = llama_cpp.Llama(model_path=model_file_path, use_mlock=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, embedding=True, verbose=False) 
-        embedding_model_cache[llm_model_name] = model_instance
+            is_llava_multimodal_model = 0
+        if not is_llava_multimodal_model:
+            if gpu_info['gpu_found']:
+                model_instance = llama_cpp.Llama(model_path=model_file_path, embedding=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, verbose=USE_VERBOSE, n_gpu_layers=-1) # Load the model with GPU acceleration
+            else:
+                model_instance = llama_cpp.Llama(model_path=model_file_path, embedding=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, verbose=USE_VERBOSE) # Load the model without GPU acceleration        
+            embedding_model_cache[llm_model_name] = model_instance
         return model_instance
     except TypeError as e:
         logger.error(f"TypeError occurred while loading the model: {e}")

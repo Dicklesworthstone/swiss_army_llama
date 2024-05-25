@@ -117,6 +117,7 @@ magika
 mutagen
 nvgpu
 pandas
+pillow
 psutil
 pydantic
 PyPDF2

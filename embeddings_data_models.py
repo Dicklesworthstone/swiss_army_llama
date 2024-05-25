@@ -8,6 +8,7 @@ from typing import List, Optional, Union, Dict
 from decouple import config
 from sqlalchemy import event
 from datetime import datetime
+from fastapi import UploadFile
 
 Base = declarative_base()
 DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="Meta-Llama-3-8B-Instruct.Q3_K_S", cast=str) 
@@ -181,8 +182,22 @@ class TextCompletionResponse(BaseModel):
     number_of_completions_to_generate: int
     time_taken_in_seconds: float
     generated_text: str
+    finish_reason: str
     llm_model_usage_json: str
 
+class ImageQuestionResponse(BaseModel):
+    question: str
+    llm_model_name: str
+    image_hash: str
+    time_taken_in_seconds: float
+    grammar_file_string: str
+    number_of_tokens_to_generate: int
+    number_of_completions_to_generate: int
+    time_taken_in_seconds: float
+    generated_text: str
+    finish_reason: str
+    llm_model_usage_json: str
+    
 class AudioTranscript(Base):
     __tablename__ = "audio_transcripts"
     audio_file_hash = Column(String, primary_key=True, index=True)
@@ -196,6 +211,7 @@ class AudioTranscript(Base):
     request_time = Column(DateTime)
     response_time = Column(DateTime)
     total_time = Column(Float)
+    corpus_identifier_string = Column(String, index=True)
 
 class AudioTranscriptResponse(BaseModel):
     audio_file_hash: str

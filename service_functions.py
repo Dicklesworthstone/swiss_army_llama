@@ -2,10 +2,10 @@ from logger_config import setup_logger
 import shared_resources
 from shared_resources import load_model, text_completion_model_cache, is_gpu_available
 from database_functions import AsyncSessionLocal, execute_with_retry
-from misc_utility_functions import clean_filename_for_url_func,  FakeUploadFile, sophisticated_sentence_splitter, merge_transcript_segments_into_combined_text, suppress_stdout_stderr
+from misc_utility_functions import clean_filename_for_url_func,  FakeUploadFile, sophisticated_sentence_splitter, merge_transcript_segments_into_combined_text, suppress_stdout_stderr, image_to_base64_data_uri, process_image, find_clip_model_path
 from embeddings_data_models import TextEmbedding, DocumentEmbedding, Document, AudioTranscript
 from embeddings_data_models import EmbeddingRequest, TextCompletionRequest
-from embeddings_data_models import TextCompletionResponse,  AudioTranscriptResponse
+from embeddings_data_models import TextCompletionResponse,  AudioTranscriptResponse, ImageQuestionResponse
 import os
 import re
 import unicodedata
@@ -33,6 +33,8 @@ from typing import List, Optional, Dict, Any
 from decouple import config
 from faster_whisper import WhisperModel
 from llama_cpp import Llama, LlamaGrammar
+from llama_cpp.llama_chat_format import Llava16ChatHandler
+from llama_cpp import llama_types
 from mutagen import File as MutagenFile
 from magika import Magika
 import httpx
@@ -54,6 +56,7 @@ MAX_CONCURRENT_PARALLEL_INFERENCE_TASKS = config("MAX_CONCURRENT_PARALLEL_INFERE
 USE_RAMDISK = config("USE_RAMDISK", default=False, cast=bool)
 USE_VERBOSE = config("USE_VERBOSE", default=False, cast=bool)
 USE_RESOURCE_MONITORING = config("USE_RESOURCE_MONITORING", default=1, cast=bool)
+USE_FLASH_ATTENTION = config("USE_FLASH_ATTENTION", default=True, cast=bool)
 RAMDISK_PATH = config("RAMDISK_PATH", default="/mnt/ramdisk", cast=str)
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 
@@ -370,18 +373,19 @@ async def compute_embeddings_for_document(sentences: list, llm_model_name: str, 
     logger.info(f"Done storing {len(embeddings_to_save):,} text embeddings in database.")
     document_embedding_results_df = pd.DataFrame(list_of_embedding_entry_dicts)
     json_content = document_embedding_results_df.to_json(orient=json_format or 'records').encode()
-    await store_document_embeddings_in_db(
-        file=file,
-        document_file_hash=document_file_hash,
-        original_file_content=original_file_content,
-        sentences=sentences,
-        json_content=json_content,
-        llm_model_name=llm_model_name,
-        embedding_pooling_method=embedding_pooling_method,
-        corpus_identifier_string=corpus_identifier_string,
-        client_ip=client_ip,
-        request_time=request_time,
-    )    
+    if file is not None:
+        await store_document_embeddings_in_db(
+            file=file,
+            document_file_hash=document_file_hash,
+            original_file_content=original_file_content,
+            sentences=sentences,
+            json_content=json_content,
+            llm_model_name=llm_model_name,
+            embedding_pooling_method=embedding_pooling_method,
+            corpus_identifier_string=corpus_identifier_string,
+            client_ip=client_ip,
+            request_time=request_time,
+        )    
     return json_content
 
 async def parse_submitted_document_file_into_sentence_strings_func(temp_file_path: str, mime_type: str):
@@ -416,7 +420,11 @@ async def _get_document_from_db(document_file_hash: str):
         result = await session.execute(select(Document).filter(Document.document_hash == document_file_hash))
         return result.scalar_one_or_none()
 
-async def store_document_embeddings_in_db(file: UploadFile, document_file_hash: str, original_file_content: bytes, sentences: List[str], json_content: bytes, llm_model_name: str, embedding_pooling_method:str, corpus_identifier_string: str, client_ip: str, request_time: datetime):
+async def store_document_embeddings_in_db(file, document_file_hash: str, original_file_content: bytes, sentences: List[str], json_content: bytes, llm_model_name: str, embedding_pooling_method:str, corpus_identifier_string: str, client_ip: str, request_time: datetime):
+    if file is None:
+        logger.error("Received a None file object in store_document_embeddings_in_db")
+    else:
+        logger.info(f"Received file: {file.filename} with content type: {file.content_type}")
     sentences = json.dumps(sentences)
     document = await _get_document_from_db(document_file_hash)
     if not document:
@@ -445,22 +453,44 @@ async def store_document_embeddings_in_db(file: UploadFile, document_file_hash: 
 def load_text_completion_model(llm_model_name: str, raise_http_exception: bool = True):
     global USE_VERBOSE
     try:
-        if llm_model_name in text_completion_model_cache: # Check if the model is already loaded in the cache
+        if llm_model_name in text_completion_model_cache:
             return text_completion_model_cache[llm_model_name]
-        models_dir = os.path.join(RAMDISK_PATH, 'models') if USE_RAMDISK else os.path.join(BASE_DIRECTORY, 'models') # Determine the model directory path
-        matching_files = glob.glob(os.path.join(models_dir, f"{llm_model_name}*")) # Search for matching model files
+        models_dir = os.path.join(RAMDISK_PATH, 'models') if USE_RAMDISK else os.path.join(BASE_DIRECTORY, 'models')
+        matching_files = glob.glob(os.path.join(models_dir, f"{llm_model_name}*"))
         if not matching_files:
             logger.error(f"No model file found matching: {llm_model_name}")
             raise FileNotFoundError
-        matching_files.sort(key=os.path.getmtime, reverse=True) # Sort the files based on modification time (recently modified files first)
+        matching_files.sort(key=os.path.getmtime, reverse=True)
         model_file_path = matching_files[0]
+        is_llava_multimodal_model = 'llava' in llm_model_name and 'mmproj' not in llm_model_name
+        chat_handler = None # Determine the appropriate chat handler based on the model name
+        if 'llava' in llm_model_name:
+            clip_model_path = find_clip_model_path(llm_model_name)
+            if clip_model_path is None:
+                raise FileNotFoundError
+            chat_handler = Llava16ChatHandler(clip_model_path=clip_model_path)
         with suppress_stdout_stderr():
             gpu_info = is_gpu_available()
-            if gpu_info['gpu_found']:
-                model_instance = Llama(model_path=model_file_path, n_ctx=TEXT_COMPLETION_CONTEXT_SIZE_IN_TOKENS, verbose=USE_VERBOSE, n_gpu_layers=-1) # Load the model with GPU acceleration
+            if gpu_info:
+                num_gpus = gpu_info['num_gpus']
+                if num_gpus > 1:
+                    llama_split_mode = 2 # 2, // split rows across GPUs | 1, // split layers and KV across GPUs
+                else:
+                    llama_split_mode = 0
             else:
-                model_instance = Llama(model_path=model_file_path, n_ctx=TEXT_COMPLETION_CONTEXT_SIZE_IN_TOKENS, verbose=USE_VERBOSE) # Load the model without GPU acceleration
-        text_completion_model_cache[llm_model_name] = model_instance # Cache the loaded model
+                num_gpus = 0
+            model_instance = Llama(
+                model_path=model_file_path,
+                embedding=True if is_llava_multimodal_model else False,
+                n_ctx=TEXT_COMPLETION_CONTEXT_SIZE_IN_TOKENS,
+                flash_attn=USE_FLASH_ATTENTION,
+                verbose=USE_VERBOSE,
+                llama_split_mode=llama_split_mode,
+                n_gpu_layers=-1 if gpu_info['gpu_found'] else 0,
+                clip_model_path=clip_model_path if is_llava_multimodal_model else None,
+                chat_handler=chat_handler
+            )
+        text_completion_model_cache[llm_model_name] = model_instance
         return model_instance
     except TypeError as e:
         logger.error(f"TypeError occurred while loading the model: {e}")
@@ -481,32 +511,56 @@ async def generate_completion_from_llm(request: TextCompletionRequest, req: Requ
     llm = load_text_completion_model(request.llm_model_name)
     logger.info(f"Done loading model: '{request.llm_model_name}'")
     list_of_llm_outputs = []
-    grammar_file_string_lower = request.grammar_file_string.lower() if request.grammar_file_string else ""    
-    if grammar_file_string_lower:
-        list_of_grammar_files = glob.glob("./grammar_files/*.gbnf")
-        matching_grammar_files = [x for x in list_of_grammar_files if grammar_file_string_lower in os.path.splitext(os.path.basename(x).lower())[0]]
-        if len(matching_grammar_files) == 0:
-            logger.error(f"No grammar file found matching: {request.grammar_file_string}")
-            raise FileNotFoundError
-        matching_grammar_files.sort(key=os.path.getmtime, reverse=True)
-        grammar_file_path = matching_grammar_files[0]
-        logger.info(f"Loading selected grammar file: '{grammar_file_path}'")
-        llama_grammar = LlamaGrammar.from_file(grammar_file_path)
+    grammar_file_string_lower = request.grammar_file_string.lower() if request.grammar_file_string else ""
+    chat_handler = llm.chat_handler # Use the appropriate chat handler based on the model name
+    if chat_handler is None: # Use the default code path if no chat handler is found
         for ii in range(request.number_of_completions_to_generate):
             logger.info(f"Generating completion {ii+1} of {request.number_of_completions_to_generate} with model {request.llm_model_name} for input prompt: '{request.input_prompt}'")
-            output = llm(prompt=request.input_prompt, grammar=llama_grammar, max_tokens=request.number_of_tokens_to_generate, temperature=request.temperature)
-            list_of_llm_outputs.append(output)
-    else:
-        for ii in range(request.number_of_completions_to_generate):
             output = llm(prompt=request.input_prompt, max_tokens=request.number_of_tokens_to_generate, temperature=request.temperature)
             list_of_llm_outputs.append(output)
+    else:
+        if grammar_file_string_lower:
+            list_of_grammar_files = glob.glob("./grammar_files/*.gbnf")
+            matching_grammar_files = [x for x in list_of_grammar_files if grammar_file_string_lower in os.path.splitext(os.path.basename(x).lower())[0]]
+            if len(matching_grammar_files) == 0:
+                logger.error(f"No grammar file found matching: {request.grammar_file_string}")
+                raise FileNotFoundError
+            matching_grammar_files.sort(key=os.path.getmtime, reverse=True)
+            grammar_file_path = matching_grammar_files[0]
+            logger.info(f"Loading selected grammar file: '{grammar_file_path}'")
+            llama_grammar = LlamaGrammar.from_file(grammar_file_path)
+            for ii in range(request.number_of_completions_to_generate):
+                logger.info(f"Generating completion {ii+1} of {request.number_of_completions_to_generate} with model {request.llm_model_name} for input prompt: '{request.input_prompt}'")
+                output = chat_handler(
+                    llama=llm,
+                    messages=[llama_types.ChatCompletionRequestUserMessage(content=request.input_prompt)],
+                    grammar=llama_grammar,
+                    max_tokens=request.number_of_tokens_to_generate,
+                    temperature=request.temperature,
+                )
+                list_of_llm_outputs.append(output)
+        else:
+            for ii in range(request.number_of_completions_to_generate):
+                logger.info(f"Generating completion {ii+1} of {request.number_of_completions_to_generate} with model {request.llm_model_name} for input prompt: '{request.input_prompt}'")
+                output = chat_handler(
+                    llama=llm,
+                    messages=[llama_types.ChatCompletionRequestUserMessage(content=request.input_prompt)],
+                    max_tokens=request.number_of_tokens_to_generate,
+                    temperature=request.temperature,
+                )
+                list_of_llm_outputs.append(output)
     response_time = datetime.utcnow()
     total_time_per_completion = ((response_time - request_time).total_seconds()) / request.number_of_completions_to_generate
     list_of_responses = []
     for idx, current_completion_output in enumerate(list_of_llm_outputs):
-        generated_text = current_completion_output['choices'][0]['text']
+        model_output = current_completion_output['choices'][0]
+        if 'message' in model_output.keys():            
+            generated_text = model_output['message']['content']
+        else:
+            generated_text = model_output['text']
         if request.grammar_file_string == 'json':
             generated_text = generated_text.encode('unicode_escape').decode()
+        finish_reason = model_output['finish_reason'],            
         llm_model_usage_json = json.dumps(current_completion_output['usage'])
         logger.info(f"Completed text completion {idx:,} in an average of {total_time_per_completion:,.2f} seconds for input prompt: '{request.input_prompt}'; Beginning of generated text: \n'{generated_text[:100]}'...")
         response = TextCompletionResponse(input_prompt = request.input_prompt,
@@ -516,9 +570,71 @@ async def generate_completion_from_llm(request: TextCompletionRequest, req: Requ
                                             number_of_completions_to_generate = request.number_of_completions_to_generate,
                                             time_taken_in_seconds = float(total_time_per_completion),
                                             generated_text = generated_text,
+                                            finish_reason = finish_reason,
                                             llm_model_usage_json = llm_model_usage_json)
         list_of_responses.append(response)
     return list_of_responses
+
+async def ask_question_about_image(
+    question: str,
+    llm_model_name: str,
+    temperature: float,
+    number_of_tokens_to_generate: int,
+    number_of_completions_to_generate: int,
+    image: UploadFile,
+    req: Request = None,
+    client_ip: str = None
+) -> List[ImageQuestionResponse]:
+    if 'llava' not in llm_model_name:
+        logger.error(f"Model '{llm_model_name}' is not a valid LLaVA model.")
+        raise HTTPException(status_code=400, detail="Model name must include 'llava'")
+    request_time = datetime.utcnow()
+    logger.info(f"Starting image question calculation using model: '{llm_model_name}' for question: '{question}'")
+    logger.info(f"Loading model: '{llm_model_name}'")
+    llm = load_text_completion_model(llm_model_name)
+    logger.info(f"Done loading model: '{llm_model_name}'")
+    original_image_path = f"/tmp/{image.filename}"
+    with open(original_image_path, "wb") as image_file:
+        image_file.write(await image.read())
+    processed_image_path = process_image(original_image_path)
+    image_hash = sha3_256(open(processed_image_path, 'rb').read()).hexdigest()
+    data_uri = image_to_base64_data_uri(processed_image_path)
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": data_uri }},
+            {"type": "text", "text": question}
+        ]},
+    ]
+    responses = []
+    for completion_count in range(number_of_completions_to_generate):
+        with suppress_stdout_stderr():
+            llm_output = llm.create_chat_completion(
+                messages=messages,
+                max_tokens=number_of_tokens_to_generate,
+                temperature=temperature,
+                top_p=0.95,
+                stream=False,
+            )
+        response_time = datetime.utcnow()
+        total_time_taken = (response_time - request_time).total_seconds()
+        generated_text = llm_output['choices'][0]['message']['content']      
+        finish_reason = llm_output['choices'][0]['finish_reason']
+        llm_model_usage_json = json.dumps(llm_output['usage'])
+        response = ImageQuestionResponse(
+            question=question,
+            llm_model_name=llm_model_name,
+            image_hash=image_hash,
+            time_taken_in_seconds=total_time_taken,
+            number_of_tokens_to_generate=number_of_tokens_to_generate,
+            number_of_completions_to_generate=number_of_completions_to_generate,
+            generated_text=generated_text,
+            finish_reason=finish_reason,
+            llm_model_usage_json=llm_model_usage_json
+        )
+        logger.info(f"Completed image question calculation in {total_time_taken:.2f} seconds for question: '{question}'; Beginning of generated text: \n'{generated_text[:100]}'...")
+        responses.append(response)
+    return responses
 
 def validate_bnf_grammar_func(grammar: str):
     defined_rules, used_rules = set(), set()
@@ -644,6 +760,10 @@ async def compute_and_store_transcript_embeddings(audio_file_name: str, sentence
         json_format="records",
     )
     zip_file_path = f"{zip_dir}/{quote(document_name)}.zip"
+    # Ensure computed_embeddings is JSON serializable
+    if isinstance(computed_embeddings, bytes):
+        computed_embeddings = computed_embeddings.decode('utf-8')    
+    zip_file_path = f"{zip_dir}/{quote(document_name)}.zip"
     with zipfile.ZipFile(zip_file_path, 'w') as zipf:
         zipf.writestr("embeddings.txt", json.dumps(computed_embeddings))
     download_url = f"download/{quote(document_name)}.zip"
@@ -654,9 +774,9 @@ async def compute_and_store_transcript_embeddings(audio_file_name: str, sentence
     await store_document_embeddings_in_db(
         file=fake_upload_file,
         document_file_hash=document_file_hash,
-        original_file_content=combined_transcript_text.encode(),
+        original_file_content=combined_transcript_text.encode('utf-8'),
         sentences=sentences,
-        json_content=json.dumps(computed_embeddings).encode(),
+        json_content=json.dumps(computed_embeddings).encode('utf-8'),
         llm_model_name=llm_model_name,
         embedding_pooling_method=embedding_pooling_method,
         corpus_identifier_string=corpus_identifier_string,
@@ -665,9 +785,9 @@ async def compute_and_store_transcript_embeddings(audio_file_name: str, sentence
     )
     return full_download_url
 
-async def compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio_file_path, audio_file_name, audio_file_size_mb, ip_address, req: Request, corpus_identifier_string: str, embedding_pooling_method: str,compute_embeddings_for_resulting_transcript_document=True, llm_model_name=DEFAULT_MODEL_NAME):
+async def compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio_file_path, audio_file_name, audio_file_size_mb, ip_address, req: Request, corpus_identifier_string: str, embedding_pooling_method: str, compute_embeddings_for_resulting_transcript_document=True, llm_model_name=DEFAULT_MODEL_NAME):
     model_size = "large-v3"
-    logger.info(f"Loading Whisper model {model_size}...")+
+    logger.info(f"Loading Whisper model {model_size}...")
     num_workers = 1 if psutil.virtual_memory().total < 32 * (1024 ** 3) else min(4, max(1, int((psutil.virtual_memory().total - 32 * (1024 ** 3)) / (4 * (1024 ** 3))))) # Only use more than 1 worker if there is at least 32GB of RAM; then use 1 worker per additional 4GB of RAM up to 4 workers max
     with suppress_stdout_stderr():
         gpu_info = is_gpu_available()
@@ -712,7 +832,7 @@ async def compute_transcript_with_whisper_from_audio_func(audio_file_hash, audio
         audio_file_hash=audio_file_hash,
         audio_file_name=audio_file_name,
         audio_file_size_mb=audio_file_size_mb,
-        transcript_segments=segments,
+        transcript_segments=segment_details,
         info=info,
         ip_address=ip_address,
         request_time=request_time,
@@ -776,7 +896,7 @@ async def get_or_compute_transcript(file: UploadFile,
             )
             audio_transcript_response = {
                 "audio_file_hash": audio_file_hash,
-                "audio_file_name": file.filename,
+                "audio_file_name": audio_file_name,
                 "audio_file_size_mb": audio_file_size_mb,
                 "segments_json": segment_details,
                 "combined_transcript_text": combined_transcript_text,
@@ -791,7 +911,10 @@ async def get_or_compute_transcript(file: UploadFile,
                 "embedding_pooling_method": embedding_pooling_method if compute_embeddings_for_resulting_transcript_document else "",
                 "corpus_identifier_string": corpus_identifier_string if compute_embeddings_for_resulting_transcript_document else "",
             }
-            os.remove(audio_file_name)
+            try:
+                os.remove(audio_file_name)
+            except Exception as e:  # noqa: F841
+                pass
             return AudioTranscriptResponse(**audio_transcript_response)
         finally:
             await shared_resources.lock_manager.unlock(lock)    
@@ -807,13 +930,10 @@ def get_audio_duration_seconds(file_path: str) -> float:
 def start_resource_monitoring(endpoint_name: str, input_data: Dict[str, Any], client_ip: str) -> Dict[str, Any]:
     if not USE_RESOURCE_MONITORING:
         return {}
-    # Capture initial system resource usage
     initial_memory = psutil.virtual_memory().used
     initial_cpu_times = psutil.cpu_times_percent(interval=None)
     start_time = time.time()
-    # Placeholder for input-specific details
     request_details = {}
-    # Extract endpoint-specific input details
     if endpoint_name == "get_embedding_vector_for_string":
         text = input_data.get("text", "")
         request_details = {
@@ -853,7 +973,19 @@ def start_resource_monitoring(endpoint_name: str, input_data: Dict[str, Any], cl
             "number_of_completions_to_generate": input_data.get("number_of_completions_to_generate", 1),
             "number_of_tokens_to_generate": input_data.get("number_of_tokens_to_generate", 1000)
         }
-    # Store initial state and request details in the context
+    elif endpoint_name == "ask_question_about_image":
+        question = input_data.get("question", "")
+        request_details = {
+            "question": question,
+            "num_words_in_question": len(question.split()),
+            "num_characters_in_question": len(question),
+            "llm_model_name": input_data.get("llm_model_name", ""),
+            "temperature": input_data.get("temperature", 0.7),
+            "grammar_file_string": input_data.get("grammar_file_string", ""),
+            "number_of_tokens_to_generate": input_data.get("number_of_tokens_to_generate", 256),
+            "number_of_completions_to_generate": input_data.get("number_of_completions_to_generate", 1),
+            "image_filename": input_data.get("image").filename if input_data.get("image") else ""
+        }
     context = {
         "endpoint_name": endpoint_name,
         "start_time": start_time,

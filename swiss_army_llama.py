@@ -6,11 +6,11 @@ from ramdisk_functions import clear_ramdisk
 from misc_utility_functions import  build_faiss_indexes, configure_redis_optimally
 from embeddings_data_models import DocumentEmbedding
 from embeddings_data_models import EmbeddingRequest, SemanticSearchRequest, AdvancedSemanticSearchRequest, SimilarityRequest, TextCompletionRequest, AddGrammarRequest
-from embeddings_data_models import EmbeddingResponse, SemanticSearchResponse, AdvancedSemanticSearchResponse, SimilarityResponse, AllStringsResponse, AllDocumentsResponse, TextCompletionResponse, AddGrammarResponse
+from embeddings_data_models import EmbeddingResponse, SemanticSearchResponse, AdvancedSemanticSearchResponse, SimilarityResponse, AllStringsResponse, AllDocumentsResponse, TextCompletionResponse, AudioTranscriptResponse, ImageQuestionResponse, AddGrammarResponse
 from embeddings_data_models import ShowLogsIncrementalModel
 from service_functions import get_or_compute_embedding, get_or_compute_transcript, add_model_url, download_file, start_resource_monitoring, end_resource_monitoring, decompress_data
 from service_functions import get_list_of_corpus_identifiers_from_list_of_embedding_texts, compute_embeddings_for_document, parse_submitted_document_file_into_sentence_strings_func
-from service_functions import generate_completion_from_llm, validate_bnf_grammar_func, convert_document_to_sentences_func, get_audio_duration_seconds, prepare_string_for_embedding
+from service_functions import generate_completion_from_llm, ask_question_about_image, validate_bnf_grammar_func, convert_document_to_sentences_func, get_audio_duration_seconds, prepare_string_for_embedding
 from grammar_builder import GrammarBuilder
 from log_viewer_functions import show_logs_incremental_func, show_logs_func
 from uvicorn_config import option
@@ -77,11 +77,16 @@ if use_hardcoded_security_token:
 else:
     USE_SECURITY_TOKEN = False
 DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="Meta-Llama-3-8B-Instruct.Q3_K_S", cast=str) 
+DEFAULT_MULTI_MODAL_MODEL_NAME = config("DEFAULT_MULTI_MODAL_MODEL_NAME", default="llava-llama-3-8b-v1_1-int4", cast=str)
 USE_RAMDISK = config("USE_RAMDISK", default=False, cast=bool)
 USE_RESOURCE_MONITORING = config("USE_RESOURCE_MONITORING", default=1, cast=bool)
 RAMDISK_PATH = config("RAMDISK_PATH", default="/mnt/ramdisk", cast=str)
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 MAX_THOUSANDS_OF_WORDs_FOR_DOCUMENT_EMBEDDING = config("MAX_THOUSANDS_OF_WORDs_FOR_DOCUMENT_EMBEDDING", default=100, cast=int)
+DEFAULT_COMPLETION_TEMPERATURE = config("DEFAULT_COMPLETION_TEMPERATURE", default=0.7, cast=float)
+DEFAULT_MAX_COMPLETION_TOKENS = config("DEFAULT_MAX_COMPLETION_TOKENS", default=1000, cast=int)
+DEFAULT_NUMBER_OF_COMPLETIONS_TO_GENERATE = config("DEFAULT_NUMBER_OF_COMPLETIONS_TO_GENERATE", default=1, cast=int)
+
 logger.info(f"USE_RAMDISK is set to: {USE_RAMDISK}")
 
 description_string = """
@@ -849,6 +854,7 @@ The response will include the generated text completion, the time taken to compu
         "number_of_completions_to_generate": 3,
         "time_taken_in_seconds": 67.17,
         "generated_text": "{\"kings\":[\\n    {\\n        \"name\": \"Henry IV\",\\n        \"reign_start\": 1589,\\n        \"reign_end\": 1610\\n    },\\n    {\\n        \"name\": \"Louis XIII\",\\n        \"reign_start\": 1610,\\n        \"reign_end\": 1643\\n    },\\n    {\\n        \"name\": \"Louis XIV\",\\n        \"reign_start\": 1643,\\n        \"reign_end\": 1715\\n    },\\n    {\\n        \"name\": \"Louis XV\",\\n        \"reign_start\": 1715,\\n        \"reign_end\": 1774\\n    },\\n    {\\n        \"name\": \"Louis XVI\",\\n        \"reign_start\": 1774,\\n        \"reign_end\": 1792\\n    }\\n]}",
+        "finish_reason": "stop",
         "llm_model_usage_json": "{\"prompt_tokens\": 13, \"completion_tokens\": 218, \"total_tokens\": 231}"
     },
     {
@@ -859,6 +865,7 @@ The response will include the generated text completion, the time taken to compu
         "number_of_completions_to_generate": 3,
         "time_taken_in_seconds": 67.17,
         "generated_text": "{\"kings\":\\n   [ {\"name\": \"Henry IV\",\\n      \"reignStart\": \"1589\",\\n      \"reignEnd\": \"1610\"},\\n     {\"name\": \"Louis XIII\",\\n      \"reignStart\": \"1610\",\\n      \"reignEnd\": \"1643\"},\\n     {\"name\": \"Louis XIV\",\\n      \"reignStart\": \"1643\",\\n      \"reignEnd\": \"1715\"}\\n   ]}",
+        "finish_reason": "stop",
         "llm_model_usage_json": "{\"prompt_tokens\": 13, \"completion_tokens\": 115, \"total_tokens\": 128}"
     },
     {
@@ -869,6 +876,7 @@ The response will include the generated text completion, the time taken to compu
         "number_of_completions_to_generate": 3,
         "time_taken_in_seconds": 67.17,
         "generated_text": "{\\n\"Henri IV\": \"1589-1610\",\\n\"Louis XIII\": \"1610-1643\",\\n\"Louis XIV\": \"1643-1715\",\\n\"Louis XV\": \"1715-1774\",\\n\"Louis XVI\": \"1774-1792\",\\n\"Louis XVIII\": \"1814-1824\",\\n\"Charles X\": \"1824-1830\",\\n\"Louis XIX (previously known as Charles X): \" \\n    : \"1824-1830\",\\n\"Charles X (previously known as Louis XIX)\": \"1824-1830\"}",
+        "finish_reason": "stop",
         "llm_model_usage_json": "{\"prompt_tokens\": 13, \"completion_tokens\": 168, \"total_tokens\": 181}"
     }
 ]
@@ -884,6 +892,82 @@ async def get_text_completions_from_input_prompt(request: TextCompletionRequest,
         if lock.valid:
             try:
                 response = await generate_completion_from_llm(request, req, client_ip)
+                return response
+            finally:
+                await shared_resources.lock_manager.unlock(lock)
+        else:
+            return {"status": "already processing"}
+    except Exception as e:
+        logger.error(f"An error occurred while processing the request: {e}")
+        logger.error(traceback.format_exc())  # Print the traceback
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+    finally:
+        end_resource_monitoring(context)
+
+
+
+@app.post("/ask_question_about_image/",
+        response_model=List[ImageQuestionResponse],
+        summary="Ask a Question About an Image",
+        description="""Ask a question about an image using a specified LLaVA model.
+### Parameters:
+- `image`: The image file to ask a question about. Can be any common image format, such as PNG, JPEG, or GIF (it will be automatically converted to a PNG file for processing).
+- `question`: The question to ask about the image.
+- `llm_model_name`: The model used to answer the question (must include 'llava').
+- `temperature`: The temperature to use for text generation (optional, defaults to 0.7).
+- `number_of_tokens_to_generate`: The number of tokens to generate (optional, defaults to 256).
+- `number_of_completions_to_generate`: The number of completions to generate (optional, defaults to 1).
+- `token`: Security token (optional).
+
+### Example Request:
+Submit a file and a JSON request for processing.
+
+### Example Response:
+```json
+[
+    {
+        "question": "What is happening in this image?",
+        "llm_model_name": "llava-llama-3-8b-v1_1-int4",
+        "image_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "time_taken_in_seconds": 12.34,
+        "number_of_tokens_to_generate": 256,
+        "number_of_completions_to_generate": 1,
+        "generated_text": "The image shows a sunset over a mountain range.",
+        "finish_reason": "stop",
+        "llm_model_usage_json": "{\"prompt_tokens\": 13, \"completion_tokens\": 218, \"total_tokens\": 231}"
+    }
+]
+""",
+        response_description="A JSON object containing the generated answer(s) to the question about the image and the request details.")
+async def ask_question_about_image_endpoint(
+    image: UploadFile = File(...),
+    question: str = Form("What is happening in this image?"),
+    llm_model_name: str = Form(DEFAULT_MULTI_MODAL_MODEL_NAME),
+    temperature: float = Form(DEFAULT_COMPLETION_TEMPERATURE),
+    number_of_tokens_to_generate: int = Form((int(DEFAULT_MAX_COMPLETION_TOKENS//3))),
+    number_of_completions_to_generate: int = Form(DEFAULT_NUMBER_OF_COMPLETIONS_TO_GENERATE),
+    req: Request = None,
+    token: str = None,
+    client_ip: str = None
+) -> List[ImageQuestionResponse]:
+    if USE_SECURITY_TOKEN and (token is None or token != SECURITY_TOKEN):
+        logger.warning(f"Unauthorized request from client IP {client_ip}")
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    context = start_resource_monitoring("ask_question_about_image", {
+        "question": question,
+        "llm_model_name": llm_model_name,
+        "temperature": temperature,
+        "number_of_tokens_to_generate": number_of_tokens_to_generate,
+        "number_of_completions_to_generate": number_of_completions_to_generate,
+        "client_ip": client_ip,
+        "timestamp": datetime.utcnow().isoformat(),
+    }, client_ip)
+    try:
+        unique_id = f"image_question_{hash(question)}_{llm_model_name}"
+        lock = await shared_resources.lock_manager.lock(unique_id)
+        if lock.valid:
+            try:
+                response = await ask_question_about_image(question, llm_model_name, temperature, number_of_tokens_to_generate, number_of_completions_to_generate, image, req, client_ip)
                 return response
             finally:
                 await shared_resources.lock_manager.unlock(lock)
@@ -1003,6 +1087,7 @@ async def turn_pydantic_model_description_into_bnf_grammar_for_llm(
 
 
 @app.post("/compute_transcript_with_whisper_from_audio/",
+        response_model=AudioTranscriptResponse,
         summary="Transcribe and Embed Audio using Whisper and LLM",
         description="""Transcribe an audio file and optionally compute document embeddings. This endpoint uses the Whisper model for transcription and a specified or default language model for embeddings. The transcription and embeddings are then stored, and a ZIP file containing the embeddings can be downloaded.
 
@@ -1042,7 +1127,7 @@ async def compute_transcript_with_whisper_from_audio(
     req: Request = None,
     token: str = None,
     client_ip: str = None
-):
+) -> AudioTranscriptResponse:
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
         logger.warning(f"Unauthorized request from client_ip {client_ip}")
         raise HTTPException(status_code=403, detail="Unauthorized")
@@ -1081,14 +1166,20 @@ async def compute_transcript_with_whisper_from_audio(
             corpus_identifier_string=corpus_identifier_string,
             req=req,
         )
-        return JSONResponse(content=audio_transcript)
+        return audio_transcript
     except Exception as e:
-        os.remove(temp_file_path)
+        try:
+            os.remove(temp_file_path)
+        except Exception as e:  # noqa: F841
+            pass
         logger.error(f"An error occurred while processing the request: {e}")
         logger.error(traceback.format_exc())  # Print the traceback
         raise HTTPException(status_code=500, detail="Internal Server Error")
     finally:
-        os.remove(temp_file_path)
+        try:
+            os.remove(temp_file_path)
+        except Exception as e:  # noqa: F841
+            pass
         end_resource_monitoring(context)
 
 

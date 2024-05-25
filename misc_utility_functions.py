@@ -5,16 +5,26 @@ import os
 import re
 import json
 import io
+import glob
 import redis
 import sys
 import threading
 import numpy as np
 import faiss
+import base64
+from typing import Optional
+from pathlib import Path
 from typing import Any
 from database_functions import AsyncSessionLocal
 from sqlalchemy import select
 from collections import defaultdict
+from PIL import Image
+from decouple import config
+
 logger = setup_logger()
+USE_RAMDISK = config("USE_RAMDISK", default=False, cast=bool)
+RAMDISK_PATH = config("RAMDISK_PATH", default="/mnt/ramdisk", cast=str)
+BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 
 class suppress_stdout_stderr(object):
     def __enter__(self):
@@ -292,3 +302,33 @@ class FakeUploadFile:
         return self.file.seek(offset, whence)
     def tell(self) -> int:
         return self.file.tell()
+    
+def process_image(image_path, max_dimension=1024):
+    original_path = Path(image_path)
+    processed_image_path = original_path.with_stem(original_path.stem + "_processed").with_suffix(original_path.suffix)
+    with Image.open(image_path) as img:
+        img.thumbnail((max_dimension, max_dimension), Image.LANCZOS)
+        img.save(processed_image_path)
+    return processed_image_path
+
+def alpha_remover_func(img):
+    if img.mode != 'RGBA':
+        return img
+    canvas = Image.new('RGBA', img.size, (255, 255, 255, 255))
+    canvas.paste(img, mask=img)
+    return canvas.convert('RGB')
+
+def image_to_base64_data_uri(file_path):
+    with open(file_path, "rb") as img_file:
+        base64_data = base64.b64encode(img_file.read()).decode('utf-8')
+        return f"data:image/png;base64,{base64_data}"    
+    
+def find_clip_model_path(llm_model_name: str) -> Optional[str]:
+    models_dir = os.path.join(RAMDISK_PATH, 'models') if USE_RAMDISK else os.path.join(BASE_DIRECTORY, 'models')
+    base_name = os.path.splitext(os.path.basename(llm_model_name))[0]
+    mmproj_model_name = base_name.replace("-f16", "-mmproj-f16").replace("-int4", "-mmproj-f16")
+    mmproj_files = glob.glob(os.path.join(models_dir, f"{mmproj_model_name}.gguf"))
+    if not mmproj_files:
+        logger.error(f"No mmproj file found matching: {mmproj_model_name}")
+        return None
+    return mmproj_files[0]    
