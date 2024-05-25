@@ -560,7 +560,7 @@ async def generate_completion_from_llm(request: TextCompletionRequest, req: Requ
             generated_text = model_output['text']
         if request.grammar_file_string == 'json':
             generated_text = generated_text.encode('unicode_escape').decode()
-        finish_reason = model_output['finish_reason'],            
+        finish_reason = str(model_output['finish_reason'])                
         llm_model_usage_json = json.dumps(current_completion_output['usage'])
         logger.info(f"Completed text completion {idx:,} in an average of {total_time_per_completion:,.2f} seconds for input prompt: '{request.input_prompt}'; Beginning of generated text: \n'{generated_text[:100]}'...")
         response = TextCompletionResponse(input_prompt = request.input_prompt,
@@ -618,8 +618,9 @@ async def ask_question_about_image(
             )
         response_time = datetime.utcnow()
         total_time_taken = (response_time - request_time).total_seconds()
-        generated_text = llm_output['choices'][0]['message']['content']      
-        finish_reason = llm_output['choices'][0]['finish_reason']
+        model_output = llm_output['choices'][0]
+        generated_text = model_output['message']['content']      
+        finish_reason = str(model_output['finish_reason'])
         llm_model_usage_json = json.dumps(llm_output['usage'])
         response = ImageQuestionResponse(
             question=question,
