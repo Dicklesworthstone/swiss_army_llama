@@ -318,9 +318,6 @@ async def calculate_sentence_embeddings_list(llama, texts: list, embedding_pooli
             covariance_matrix = np.cov(embeddings.T, rowvar=False)
             eigenvalues, eigenvectors = np.linalg.eigh(covariance_matrix)
             flattened_vector = np.concatenate([eigenvalues, eigenvectors.flatten()]).flatten()
-        elif embedding_pooling_method == "gram_matrix":
-            gram_matrix = np.dot(embeddings, embeddings.T)
-            flattened_vector = gram_matrix.flatten()
         elif embedding_pooling_method == "qr_decomposition":
             q, r = qr(embeddings.T)
             flattened_vector = np.concatenate([q.flatten(), r.flatten()]).flatten()

@@ -295,7 +295,7 @@ async def add_new_model(model_url: str, token: str = None) -> Dict[str, Any]:
 The request must contain the following attributes:
 - `text`: The input text for which the embedding vector is to be retrieved.
 - `llm_model_name`: The model used to calculate the embedding (optional, will use the default model if not provided).
-- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'mean', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd'; default is 'svd').
+- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four', 'qr_decomposition', 'cholesky_decomposition', 'ica', 'nmf', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
 
 ### Example (note that `llm_model_name` is optional):
 ```json
@@ -435,7 +435,7 @@ async def compute_similarity_between_strings(request: SimilarityRequest, req: Re
 The request must contain the following attributes:
 - `query_text`: The input text for which to find the most similar string.
 - `llm_model_name`: The model used to calculate embeddings.
-- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four', 'gram_matrix', 'qr_decomposition', 'cholesky_decomposition', 'ica', 'nmf', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
+- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four', 'qr_decomposition', 'cholesky_decomposition', 'ica', 'nmf', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
 - `corpus_identifier_string`: An optional string identifier to restrict the search to a specific corpus.
 - `number_of_most_similar_strings_to_return`: (Optional) The number of most similar strings to return, defaults to 10.
 
@@ -544,7 +544,7 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
 The request must contain the following attributes:
 - `query_text`: The input text for which to find the most similar string.
 - `llm_model_name`: The model used to calculate embeddings.
-- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four', 'gram_matrix', 'qr_decomposition', 'cholesky_decomposition', 'ica', 'nmf', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
+- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four', 'qr_decomposition', 'cholesky_decomposition', 'ica', 'nmf', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
 - `corpus_identifier_string`: An optional string identifier to restrict the search to a specific corpus.
 - `similarity_filter_percentage`: (Optional) The percentage of embeddings to filter based on cosine similarity, defaults to 0.02 (i.e., top 2%).
 - `number_of_most_similar_strings_to_return`: (Optional) The number of most similar strings to return after applying the second similarity measure, defaults to 10.
@@ -664,7 +664,7 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
 - `hash`: SHA3-256 hash of the document file to verify integrity.
 - `size`: Size of the document file in bytes to verify completeness.
 - `llm_model_name`: The model used to calculate embeddings (optional).
-- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four', 'gram_matrix', 'qr_decomposition', 'cholesky_decomposition', 'ica', 'nmf', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
+- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four', 'qr_decomposition', 'cholesky_decomposition', 'ica', 'nmf', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
 - `corpus_identifier_string`: An optional string identifier for grouping documents into a specific corpus.
 - `json_format`: The format of the JSON response (optional, see details below).
 - `send_back_json_or_zip_file`: Whether to return a JSON file or a ZIP file containing the embeddings file (optional, defaults to `zip`).
@@ -1099,7 +1099,7 @@ async def turn_pydantic_model_description_into_bnf_grammar_for_llm(
 - `size`: Size of the audio file in bytes to verify completeness.
 - `compute_embeddings_for_resulting_transcript_document`: Boolean to indicate if document embeddings should be computed (optional, defaults to True).
 - `llm_model_name`: The language model used for computing embeddings (optional, defaults to the default model name).
-- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four', 'gram_matrix', 'qr_decomposition', 'cholesky_decomposition', 'ica', 'nmf', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
+- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four', 'qr_decomposition', 'cholesky_decomposition', 'ica', 'nmf', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
 - `req`: HTTP Request object for additional request metadata (optional).
 - `token`: Security token for API access (optional).
 - `client_ip`: Client IP for logging and security (optional).

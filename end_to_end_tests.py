@@ -19,19 +19,25 @@ SEARCH_STRING = "equine"
 SEARCH_STRING_PDF = "Threat model"
 
 async def get_model_names() -> List[str]:
+    print("Requesting list of available model names...")
     async with httpx.AsyncClient() as client:
         response = await client.get(f"{BASE_URL}/get_list_of_available_model_names/")
         model_names = response.json()["model_names"]
+        print(f"Received model names: {model_names}")
         return [name for name in model_names if "llava" not in name]
 
 async def get_embedding_pooling_methods() -> List[str]:
-    return ['means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four', 'gram_matrix',
-            'qr_decomposition', 'cholesky_decomposition', 'ica', 'nmf', 'factor_analysis', 'gaussian_random_projection']
+    pooling_methods = ['means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four',
+                       'qr_decomposition', 'cholesky_decomposition', 'ica', 'nmf', 'factor_analysis', 'gaussian_random_projection']
+    print(f"Using embedding pooling methods: {pooling_methods}")
+    return pooling_methods
 
 async def compute_document_embeddings(model_name: str, embedding_pooling_method: str) -> float:
+    print(f"Reading document from {DOCUMENT_PATH} for model {model_name} with pooling method {embedding_pooling_method}...")
     with open(os.path.expanduser(DOCUMENT_PATH), "rb") as file:
         start_time = time.time()
         async with httpx.AsyncClient() as client:
+            print("Sending request to compute document embeddings...")
             _ = await client.post(
                 f"{BASE_URL}/get_all_embedding_vectors_for_document/",
                 files={"file": file},
@@ -42,9 +48,12 @@ async def compute_document_embeddings(model_name: str, embedding_pooling_method:
                 }
             )
         end_time = time.time()
-        return end_time - start_time
+        elapsed_time = end_time - start_time
+        print(f"Document embeddings computed in {elapsed_time:.2f} seconds.")
+        return elapsed_time
 
 async def perform_semantic_search(model_name: str, embedding_pooling_method: str) -> Dict[str, Any]:
+    print(f"Performing semantic search for model {model_name} with pooling method {embedding_pooling_method}...")
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"{BASE_URL}/search_stored_embeddings_with_query_string_for_semantic_similarity/",
@@ -55,9 +64,12 @@ async def perform_semantic_search(model_name: str, embedding_pooling_method: str
                 "corpus_identifier_string": CORPUS_IDENTIFIER_STRING,
             }
         )
-        return response.json()
+        search_results = response.json()
+        print(f"Semantic search completed. Results: {search_results}")
+        return search_results
 
 async def perform_advanced_semantic_search(model_name: str, embedding_pooling_method: str) -> Dict[str, Any]:
+    print(f"Performing advanced semantic search for model {model_name} with pooling method {embedding_pooling_method}...")
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"{BASE_URL}/advanced_search_stored_embeddings_with_query_string_for_semantic_similarity/",
@@ -71,9 +83,12 @@ async def perform_advanced_semantic_search(model_name: str, embedding_pooling_me
                 "result_sorting_metric": "hoeffding_d"
             }
         )
-        return response.json()
+        advanced_search_results = response.json()
+        print(f"Advanced semantic search completed. Results: {advanced_search_results}")
+        return advanced_search_results
 
 async def generate_text_completion(input_prompt: str, model_name: str) -> Dict[str, Any]:
+    print(f"Generating text completion for model {model_name} with prompt '{input_prompt}'...")
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"{BASE_URL}/get_text_completions_from_input_prompt/",
@@ -85,9 +100,12 @@ async def generate_text_completion(input_prompt: str, model_name: str) -> Dict[s
                 "number_of_tokens_to_generate": 150
             }
         )
-        return response.json()
+        completion_results = response.json()
+        print(f"Text completion generated. Results: {completion_results}")
+        return completion_results
 
 async def ask_question_about_image(image_path: str, question: str, model_name: str) -> Dict[str, Any]:
+    print(f"Asking question '{question}' about image at {image_path} with model {model_name}...")
     with open(os.path.expanduser(image_path), "rb") as file:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -101,9 +119,12 @@ async def ask_question_about_image(image_path: str, question: str, model_name: s
                     "number_of_completions_to_generate": 1
                 }
             )
-        return response.json()
+        image_question_results = response.json()
+        print(f"Question about image answered. Results: {image_question_results}")
+        return image_question_results
 
 async def compute_transcript_with_whisper(audio_path: str) -> Dict[str, Any]:
+    print(f"Computing transcript for audio file at {audio_path}...")
     with open(os.path.expanduser(audio_path), "rb") as file:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -116,22 +137,28 @@ async def compute_transcript_with_whisper(audio_path: str) -> Dict[str, Any]:
                     "corpus_identifier_string": CORPUS_IDENTIFIER_STRING
                 }
             )
-        return response.json()
+        transcript_results = response.json()
+        print(f"Transcript computed. Results: {transcript_results}")
+        return transcript_results
 
 async def main():
     start_time = time.time()
+    print("Starting the main async process...")
+
     model_names = await get_model_names()
     embedding_pooling_methods = await get_embedding_pooling_methods()
 
     results = {}
     for model_name in model_names:
         for embedding_pooling_method in embedding_pooling_methods:
+            print(f"\n{'_'*100}\n")
             print(f"Computing embeddings for model {model_name} and pooling method {embedding_pooling_method}...")
             total_time = await compute_document_embeddings(model_name, embedding_pooling_method)
             print(f"Embeddings computed in {total_time:.2f} seconds.")
             results[(model_name, embedding_pooling_method)] = total_time
 
     for model_name, embedding_pooling_method in results:
+        print(f"\n{'_'*100}\n")
         print(f"Performing semantic search for model {model_name} and pooling method {embedding_pooling_method}...")
         search_results = await perform_semantic_search(model_name, embedding_pooling_method)
         saved_outputs_dir = "saved_outputs"
@@ -153,6 +180,7 @@ async def main():
 
     # Test text completion
     for model_name in model_names:
+        print(f"\n{'_'*100}\n")
         print(f"Generating text completion for model {model_name}...")
         completion_results = await generate_text_completion(TEXT_PROMPT, model_name)
         completion_file = f"{model_name}_text_completion.json"
@@ -162,6 +190,7 @@ async def main():
         print(f"Text completion results saved to {completion_file_path}.")
 
     # Test image question
+    print(f"\n{'_'*100}\n")
     image_question_model_name = config("DEFAULT_MULTI_MODAL_MODEL_NAME", default="llava-llama-3-8b-v1_1-int4")
     print(f"Asking question about image with model {image_question_model_name}...")
     image_question_results = await ask_question_about_image(IMAGE_PATH, "What is happening in this image?", image_question_model_name)
@@ -172,6 +201,7 @@ async def main():
     print(f"Image question results saved to {image_question_file_path}.")
 
     # Test Whisper transcript
+    print(f"\n{'_'*100}\n")
     print(f"Computing transcript with Whisper for audio file {AUDIO_PATH}...")
     transcript_results = await compute_transcript_with_whisper(AUDIO_PATH)
     transcript_file = "whisper_transcript.json"
@@ -181,6 +211,7 @@ async def main():
     print(f"Whisper transcript results saved to {transcript_file_path}.")
 
     end_time = time.time()
+    print(f"\n{'_'*100}\n")
     print(f"All tests completed in {end_time - start_time:.2f} seconds.")
 
 if __name__ == "__main__":
