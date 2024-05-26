@@ -191,7 +191,6 @@ class ImageQuestionResponse(BaseModel):
     llm_model_name: str
     image_hash: str
     time_taken_in_seconds: float
-    grammar_file_string: str
     number_of_tokens_to_generate: int
     number_of_completions_to_generate: int
     time_taken_in_seconds: float
@@ -289,23 +288,3 @@ def fill_default_values_in_request(request):
             request.number_of_tokens_to_generate = DEFAULT_MAX_COMPLETION_TOKENS
         if request.number_of_completions_to_generate is None:
             request.number_of_completions_to_generate = DEFAULT_NUMBER_OF_COMPLETIONS_TO_GENERATE
-    elif isinstance(request, ImageQuestionResponse):
-        if request.llm_model_name is None:
-            request.llm_model_name = DEFAULT_MULTI_MODAL_MODEL_NAME
-        if request.embedding_pooling_method is None:
-            request.embedding_pooling_method = DEFAULT_EMBEDDING_POOLING_METHOD
-        if request.corpus_identifier_string is None:
-            request.corpus_identifier_string = ""
-        if request.number_of_tokens_to_generate is None:
-            request.number_of_tokens_to_generate = 500
-        if request.number_of_completions_to_generate is None:
-            request.number_of_completions_to_generate = DEFAULT_NUMBER_OF_COMPLETIONS_TO_GENERATE
-        if request.grammar_file_string is None:
-            request.grammar_file_string = ""
-    elif isinstance(request, AudioTranscriptResponse):
-        if request.llm_model_name is None:
-            request.llm_model_name = DEFAULT_MODEL_NAME
-        if request.embedding_pooling_method is None:
-            request.embedding_pooling_method = DEFAULT_EMBEDDING_POOLING_METHOD
-        if request.corpus_identifier_string is None:
-            request.corpus_identifier_string = ""

@@ -65,41 +65,58 @@ async def compute_document_embeddings(model_name: str, embedding_pooling_method:
         elapsed_time = end_time - start_time
         print(f"Document embeddings computed in {elapsed_time:.2f} seconds with pooling method {embedding_pooling_method}.")
         return elapsed_time
-
+    
 async def perform_semantic_search(model_name: str, embedding_pooling_method: str) -> Dict[str, Any]:
     print(f"Performing semantic search for model {model_name} with pooling method {embedding_pooling_method}...")
-    async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT_IN_SECONDS) as client:
-        response = await client.post(
-            f"{BASE_URL}/search_stored_embeddings_with_query_string_for_semantic_similarity/",
-            json={
-                "query_text": SEARCH_STRING,
-                "llm_model_name": model_name,
-                "embedding_pooling_method": embedding_pooling_method,
-                "corpus_identifier_string": CORPUS_IDENTIFIER_STRING,
-            }
-        )
-        search_results = response.json()
-        print(f"Semantic search completed. Results: {search_results}")
-        return search_results
-
+    try:
+        async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT_IN_SECONDS) as client:
+            response = await client.post(
+                f"{BASE_URL}/search_stored_embeddings_with_query_string_for_semantic_similarity/",
+                json={
+                    "query_text": SEARCH_STRING,
+                    "number_of_most_similar_strings_to_return": 10,
+                    "llm_model_name": model_name,
+                    "embedding_pooling_method": embedding_pooling_method,
+                    "corpus_identifier_string": CORPUS_IDENTIFIER_STRING,
+                }
+            )
+            response.raise_for_status()  # Raise an exception for HTTP errors
+            search_results = response.json()
+            print(f"Semantic search completed. Results: {search_results}")
+            return search_results
+    except httpx.HTTPStatusError as e:
+        print(f"HTTP error occurred: {e.response.status_code} - {e.response.text}")
+        return {"error": f"HTTP error occurred: {e.response.status_code}"}
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+        return {"error": str(e)}
+    
 async def perform_advanced_semantic_search(model_name: str, embedding_pooling_method: str) -> Dict[str, Any]:
     print(f"Performing advanced semantic search for model {model_name} with pooling method {embedding_pooling_method}...")
-    async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT_IN_SECONDS) as client:
-        response = await client.post(
-            f"{BASE_URL}/advanced_search_stored_embeddings_with_query_string_for_semantic_similarity/",
-            json={
-                "query_text": SEARCH_STRING,
-                "llm_model_name": model_name,
-                "embedding_pooling_method": embedding_pooling_method,
-                "corpus_identifier_string": CORPUS_IDENTIFIER_STRING,
-                "similarity_filter_percentage": 0.02,
-                "number_of_most_similar_strings_to_return": 10,
-                "result_sorting_metric": "hoeffding_d"
-            }
-        )
-        advanced_search_results = response.json()
-        print(f"Advanced semantic search completed. Results: {advanced_search_results}")
-        return advanced_search_results
+    try:
+        async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT_IN_SECONDS) as client:
+            response = await client.post(
+                f"{BASE_URL}/advanced_search_stored_embeddings_with_query_string_for_semantic_similarity/",
+                json={
+                    "query_text": SEARCH_STRING,
+                    "llm_model_name": model_name,
+                    "embedding_pooling_method": embedding_pooling_method,
+                    "corpus_identifier_string": CORPUS_IDENTIFIER_STRING,
+                    "similarity_filter_percentage": 0.01,
+                    "number_of_most_similar_strings_to_return": 10,
+                    "result_sorting_metric": "hoeffding_d"
+                }
+            )
+            response.raise_for_status()  # Raise an exception for HTTP errors
+            advanced_search_results = response.json()
+            print(f"Advanced semantic search completed. Results: {advanced_search_results}")
+            return advanced_search_results
+    except httpx.HTTPStatusError as e:
+        print(f"HTTP error occurred: {e.response.status_code} - {e.response.text}")
+        return {"error": f"HTTP error occurred: {e.response.status_code}"}
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+        return {"error": str(e)}
 
 async def generate_text_completion(input_prompt: str, model_name: str) -> Dict[str, Any]:
     print(f"Generating text completion for model {model_name} with prompt '{input_prompt}'...")

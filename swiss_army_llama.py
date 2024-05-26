@@ -758,7 +758,8 @@ async def get_all_embedding_vectors_for_document(
                     logger.info("Document has been processed before, returning existing result")
                     sentences = existing_document_embedding.sentences
                     document_embedding_results_json_compressed_binary = existing_document_embedding.document_embedding_results_json_compressed_binary
-                    json_content = decompress_data(document_embedding_results_json_compressed_binary)
+                    document_embedding_results_json_decompressed_binary = decompress_data(document_embedding_results_json_compressed_binary)
+                    json_content = document_embedding_results_json_decompressed_binary.decode('utf-8')
                     if len(json_content) == 0:
                         raise HTTPException(status_code=400, detail="Could not retrieve document embedding results.")
                     existing_document = 1
