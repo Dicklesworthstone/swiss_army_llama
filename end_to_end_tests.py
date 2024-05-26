@@ -17,10 +17,11 @@ TEXT_PROMPT = "Make up a poem about Bitcoin in the style of John Donne's 'The Ca
 CORPUS_IDENTIFIER_STRING = "end_to_end_test"
 SEARCH_STRING = "equine"
 SEARCH_STRING_PDF = "Threat model"
+HTTPX_TIMEOUT_IN_SECONDS = 600
 
 async def get_model_names() -> List[str]:
     print("Requesting list of available model names...")
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT_IN_SECONDS) as client:
         response = await client.get(f"{BASE_URL}/get_list_of_available_model_names/")
         model_names = response.json()["model_names"]
         print(f"Received model names: {model_names}")
@@ -28,7 +29,7 @@ async def get_model_names() -> List[str]:
 
 async def get_embedding_pooling_methods() -> List[str]:
     pooling_methods = ['means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four',
-                       'qr_decomposition', 'cholesky_decomposition', 'ica', 'nmf', 'factor_analysis', 'gaussian_random_projection']
+                    'qr_decomposition', 'cholesky_decomposition', 'ica', 'nmf', 'factor_analysis', 'gaussian_random_projection']
     print(f"Using embedding pooling methods: {pooling_methods}")
     return pooling_methods
 
@@ -36,7 +37,7 @@ async def compute_document_embeddings(model_name: str, embedding_pooling_method:
     print(f"Reading document from {DOCUMENT_PATH} for model {model_name} with pooling method {embedding_pooling_method}...")
     with open(os.path.expanduser(DOCUMENT_PATH), "rb") as file:
         start_time = time.time()
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT_IN_SECONDS) as client:
             print("Sending request to compute document embeddings...")
             _ = await client.post(
                 f"{BASE_URL}/get_all_embedding_vectors_for_document/",
@@ -54,7 +55,7 @@ async def compute_document_embeddings(model_name: str, embedding_pooling_method:
 
 async def perform_semantic_search(model_name: str, embedding_pooling_method: str) -> Dict[str, Any]:
     print(f"Performing semantic search for model {model_name} with pooling method {embedding_pooling_method}...")
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT_IN_SECONDS) as client:
         response = await client.post(
             f"{BASE_URL}/search_stored_embeddings_with_query_string_for_semantic_similarity/",
             json={
@@ -70,7 +71,7 @@ async def perform_semantic_search(model_name: str, embedding_pooling_method: str
 
 async def perform_advanced_semantic_search(model_name: str, embedding_pooling_method: str) -> Dict[str, Any]:
     print(f"Performing advanced semantic search for model {model_name} with pooling method {embedding_pooling_method}...")
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT_IN_SECONDS) as client:
         response = await client.post(
             f"{BASE_URL}/advanced_search_stored_embeddings_with_query_string_for_semantic_similarity/",
             json={
@@ -89,7 +90,7 @@ async def perform_advanced_semantic_search(model_name: str, embedding_pooling_me
 
 async def generate_text_completion(input_prompt: str, model_name: str) -> Dict[str, Any]:
     print(f"Generating text completion for model {model_name} with prompt '{input_prompt}'...")
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT_IN_SECONDS) as client:
         response = await client.post(
             f"{BASE_URL}/get_text_completions_from_input_prompt/",
             json={
@@ -107,7 +108,7 @@ async def generate_text_completion(input_prompt: str, model_name: str) -> Dict[s
 async def ask_question_about_image(image_path: str, question: str, model_name: str) -> Dict[str, Any]:
     print(f"Asking question '{question}' about image at {image_path} with model {model_name}...")
     with open(os.path.expanduser(image_path), "rb") as file:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT_IN_SECONDS) as client:
             response = await client.post(
                 f"{BASE_URL}/ask_question_about_image/",
                 files={"image": file},
@@ -126,7 +127,7 @@ async def ask_question_about_image(image_path: str, question: str, model_name: s
 async def compute_transcript_with_whisper(audio_path: str) -> Dict[str, Any]:
     print(f"Computing transcript for audio file at {audio_path}...")
     with open(os.path.expanduser(audio_path), "rb") as file:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT_IN_SECONDS) as client:
             response = await client.post(
                 f"{BASE_URL}/compute_transcript_with_whisper_from_audio/",
                 files={"file": file},
