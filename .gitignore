@@ -171,3 +171,4 @@ old_logs
 models_url.json
 resource_monitoring_logs.json
 redis_configured.txt
+saved_outputs

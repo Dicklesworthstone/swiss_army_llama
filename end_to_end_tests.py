@@ -18,6 +18,8 @@ CORPUS_IDENTIFIER_STRING = "end_to_end_test"
 SEARCH_STRING = "equine"
 SEARCH_STRING_PDF = "Threat model"
 HTTPX_TIMEOUT_IN_SECONDS = 600
+USE_MANUAL_MODEL_NAME_LIST = 1
+MANUAL_MODEL_NAME_LIST = ["Meta-Llama-3-8B-Instruct.Q3_K_S"]
 
 async def get_model_names() -> List[str]:
     print("Requesting list of available model names...")
@@ -38,19 +40,30 @@ async def compute_document_embeddings(model_name: str, embedding_pooling_method:
     with open(os.path.expanduser(DOCUMENT_PATH), "rb") as file:
         start_time = time.time()
         async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT_IN_SECONDS) as client:
-            print("Sending request to compute document embeddings...")
-            _ = await client.post(
-                f"{BASE_URL}/get_all_embedding_vectors_for_document/",
-                files={"file": file},
+            print(f"Sending request to compute document embeddings with model {model_name} and pooling method {embedding_pooling_method}...")
+            url = (
+                f"{BASE_URL}/get_all_embedding_vectors_for_document/"
+                f"?llm_model_name={model_name}"
+                f"&embedding_pooling_method={embedding_pooling_method}"
+                f"&corpus_identifier_string={CORPUS_IDENTIFIER_STRING}"
+                f"&json_format=records"
+                f"&send_back_json_or_zip_file=zip"
+            )
+            response = await client.post(
+                url,
+                files={"file": ("document.txt", file, "text/plain")},
                 data={
-                    "llm_model_name": model_name,
-                    "embedding_pooling_method": embedding_pooling_method,
-                    "corpus_identifier_string": CORPUS_IDENTIFIER_STRING,
+                    "url": "",
+                    "hash": "",
+                    "size": "",
                 }
             )
+            print(f"Request sent with embedding_pooling_method: {embedding_pooling_method}. Status code: {response.status_code}")
+            response_json = response.json()
+            print(f"Server response received: {response_json}")
         end_time = time.time()
         elapsed_time = end_time - start_time
-        print(f"Document embeddings computed in {elapsed_time:.2f} seconds.")
+        print(f"Document embeddings computed in {elapsed_time:.2f} seconds with pooling method {embedding_pooling_method}.")
         return elapsed_time
 
 async def perform_semantic_search(model_name: str, embedding_pooling_method: str) -> Dict[str, Any]:
@@ -146,7 +159,10 @@ async def main():
     start_time = time.time()
     print("Starting the main async process...")
 
-    model_names = await get_model_names()
+    if USE_MANUAL_MODEL_NAME_LIST:
+        model_names = MANUAL_MODEL_NAME_LIST
+    else:
+        model_names = await get_model_names()
     embedding_pooling_methods = await get_embedding_pooling_methods()
 
     results = {}

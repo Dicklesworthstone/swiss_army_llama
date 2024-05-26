@@ -4,10 +4,9 @@ from logger_config import setup_logger
 from database_functions import AsyncSessionLocal
 from ramdisk_functions import clear_ramdisk
 from misc_utility_functions import  build_faiss_indexes, configure_redis_optimally
-from embeddings_data_models import DocumentEmbedding
+from embeddings_data_models import DocumentEmbedding, ShowLogsIncrementalModel, fill_default_values_in_request
 from embeddings_data_models import EmbeddingRequest, SemanticSearchRequest, AdvancedSemanticSearchRequest, SimilarityRequest, TextCompletionRequest, AddGrammarRequest
 from embeddings_data_models import EmbeddingResponse, SemanticSearchResponse, AdvancedSemanticSearchResponse, SimilarityResponse, AllStringsResponse, AllDocumentsResponse, TextCompletionResponse, AudioTranscriptResponse, ImageQuestionResponse, AddGrammarResponse
-from embeddings_data_models import ShowLogsIncrementalModel
 from service_functions import get_or_compute_embedding, get_or_compute_transcript, add_model_url, download_file, start_resource_monitoring, end_resource_monitoring, decompress_data
 from service_functions import get_list_of_corpus_identifiers_from_list_of_embedding_texts, compute_embeddings_for_document, parse_submitted_document_file_into_sentence_strings_func
 from service_functions import generate_completion_from_llm, ask_question_about_image, validate_bnf_grammar_func, convert_document_to_sentences_func, get_audio_duration_seconds, prepare_string_for_embedding
@@ -86,6 +85,7 @@ MAX_THOUSANDS_OF_WORDs_FOR_DOCUMENT_EMBEDDING = config("MAX_THOUSANDS_OF_WORDs_F
 DEFAULT_COMPLETION_TEMPERATURE = config("DEFAULT_COMPLETION_TEMPERATURE", default=0.7, cast=float)
 DEFAULT_MAX_COMPLETION_TOKENS = config("DEFAULT_MAX_COMPLETION_TOKENS", default=1000, cast=int)
 DEFAULT_NUMBER_OF_COMPLETIONS_TO_GENERATE = config("DEFAULT_NUMBER_OF_COMPLETIONS_TO_GENERATE", default=1, cast=int)
+DEFAULT_EMBEDDING_POOLING_METHOD = config("DEFAULT_EMBEDDING_POOLING_METHOD", default="svd", cast=str)
 
 logger.info(f"USE_RAMDISK is set to: {USE_RAMDISK}")
 
@@ -321,6 +321,7 @@ async def get_embedding_vector_for_string(request: EmbeddingRequest, req: Reques
         logger.warning(f"Unauthorized request from client IP {client_ip}")
         raise HTTPException(status_code=403, detail="Unauthorized")
     try:
+        request = fill_default_values_in_request(request)
         request.text = prepare_string_for_embedding(request.text)
         unique_id = f"get_embedding_{request.text}_{request.llm_model_name}_{request.embedding_pooling_method}"
         lock = await shared_resources.lock_manager.lock(unique_id)
@@ -367,13 +368,14 @@ The request must contain the following attributes:
 }
 ```""")
 async def compute_similarity_between_strings(request: SimilarityRequest, req: Request, token: str = None) -> SimilarityResponse:
-    request.text1 = prepare_string_for_embedding(request.text1)
-    request.text2 = prepare_string_for_embedding(request.text2)
-    logger.info(f"Received request: {request}")
-    request_time = datetime.utcnow()
-    similarity_measure = request.similarity_measure.lower()
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
         raise HTTPException(status_code=403, detail="Unauthorized")
+    logger.info(f"Received request: {request}")
+    request_time = datetime.utcnow()
+    request = fill_default_values_in_request(request)
+    request.text1 = prepare_string_for_embedding(request.text1)
+    request.text2 = prepare_string_for_embedding(request.text2)
+    similarity_measure = request.similarity_measure.lower()
     unique_id = f"compute_similarity_{request.text1}_{request.text2}_{request.llm_model_name}_{request.embedding_pooling_method}_{similarity_measure}"
     lock = await shared_resources.lock_manager.lock(unique_id)
     if lock.valid:
@@ -466,20 +468,21 @@ The response will include the most similar strings found in the database, along 
 ```""",
         response_description="A JSON object containing the query text along with the most similar strings and similarity scores.")
 async def search_stored_embeddings_with_query_string_for_semantic_similarity(request: SemanticSearchRequest, req: Request, token: str = None) -> SemanticSearchResponse:
+    if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
+        raise HTTPException(status_code=403, detail="Unauthorized")                            
     global faiss_indexes, associated_texts_by_model_and_pooling_method
+    request_time = datetime.utcnow()
+    request = fill_default_values_in_request(request)
     request.query_text = prepare_string_for_embedding(request.query_text)
     unique_id = f"semantic_search_{request.query_text}_{request.llm_model_name}_{request.embedding_pooling_method}_{request.corpus_identifier_string}_{request.number_of_most_similar_strings_to_return}"  # Unique ID for this operation
     lock = await shared_resources.lock_manager.lock(unique_id)        
     if lock.valid:
         try:
-            if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
-                raise HTTPException(status_code=403, detail="Unauthorized")                            
             faiss_indexes, associated_texts_by_model_and_pooling_method = await build_faiss_indexes(force_rebuild=True)
             try:
                 faiss_index = faiss_indexes[(request.llm_model_name, request.embedding_pooling_method)]
             except KeyError:
                 raise HTTPException(status_code=400, detail=f"No FAISS index found for model: {request.llm_model_name} and pooling method: {request.embedding_pooling_method}")
-            request_time = datetime.utcnow()
             llm_model_name = request.llm_model_name
             embedding_pooling_method = request.embedding_pooling_method
             num_results = request.number_of_most_similar_strings_to_return
@@ -579,20 +582,21 @@ The response will include the most similar strings found in the database, along 
 ```""",
         response_description="A JSON object containing the query text and the most similar strings, along with their similarity scores for multiple measures.")
 async def advanced_search_stored_embeddings_with_query_string_for_semantic_similarity(request: AdvancedSemanticSearchRequest, req: Request, token: str = None) -> AdvancedSemanticSearchResponse:
+    if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
+        raise HTTPException(status_code=403, detail="Unauthorized")
     global faiss_indexes, associated_texts_by_model_and_pooling_method
+    request_time = datetime.utcnow()
+    request = fill_default_values_in_request(request)
     request.query_text = prepare_string_for_embedding(request.query_text)   
     unique_id = f"advanced_semantic_search_{request.query_text}_{request.llm_model_name}_{request.embedding_pooling_method}_{request.similarity_filter_percentage}_{request.number_of_most_similar_strings_to_return}"
     lock = await shared_resources.lock_manager.lock(unique_id)        
     if lock.valid:
         try:                
-            if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
-                raise HTTPException(status_code=403, detail="Unauthorized")
             faiss_indexes, associated_texts_by_model_and_pooling_method = await build_faiss_indexes(force_rebuild=True)
             try:
                 faiss_index = faiss_indexes[(request.llm_model_name, request.embedding_pooling_method)]
             except KeyError:
                 raise HTTPException(status_code=400, detail=f"No FAISS index found for model: {request.llm_model_name} and pooling method: {request.embedding_pooling_method}")            
-            request_time = datetime.utcnow()
             llm_model_name = request.llm_model_name
             embedding_pooling_method = request.embedding_pooling_method
             num_results_before_corpus_filter = request.number_of_most_similar_strings_to_return * 100
@@ -660,9 +664,9 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
 
 ### Parameters:
 - `file`: The uploaded document file (either plain text, .doc/.docx, PDF, etc.).
-- `url`: URL of the document file to download.
-- `hash`: SHA3-256 hash of the document file to verify integrity.
-- `size`: Size of the document file in bytes to verify completeness.
+- `url`: URL of the document file to download (optional; in lieu of `file`).
+- `hash`: SHA3-256 hash of the document file to verify integrity (optional; in lieu of `file`).
+- `size`: Size of the document file in bytes to verify completeness (optional; in lieu of `file`).
 - `llm_model_name`: The model used to calculate embeddings (optional).
 - `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four', 'qr_decomposition', 'cholesky_decomposition', 'ica', 'nmf', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
 - `corpus_identifier_string`: An optional string identifier for grouping documents into a specific corpus.
@@ -691,17 +695,18 @@ async def get_all_embedding_vectors_for_document(
     hash: str = Form(None),
     size: int = Form(None),
     llm_model_name: str = DEFAULT_MODEL_NAME,
-    embedding_pooling_method: str = "svd",
+    embedding_pooling_method: str = DEFAULT_EMBEDDING_POOLING_METHOD,
     corpus_identifier_string: str = "", 
     json_format: str = 'records',
     token: str = None,
     send_back_json_or_zip_file: str = 'zip',
     req: Request = None
 ):
-    client_ip = req.client.host if req else "localhost"
-    request_time = datetime.utcnow()
+    logger.info(f"Received request with embedding_pooling_method: {embedding_pooling_method}")
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
         raise HTTPException(status_code=403, detail="Unauthorized")
+    client_ip = req.client.host if req else "localhost"
+    request_time = datetime.utcnow()
     if file:
         input_data_binary = await file.read()
         result = magika.identify_bytes(input_data_binary)
@@ -753,8 +758,7 @@ async def get_all_embedding_vectors_for_document(
                     logger.info("Document has been processed before, returning existing result")
                     sentences = existing_document_embedding.sentences
                     document_embedding_results_json_compressed_binary = existing_document_embedding.document_embedding_results_json_compressed_binary
-                    document_embedding_results_json = decompress_data(document_embedding_results_json_compressed_binary)
-                    json_content = json.dumps(document_embedding_results_json).encode()
+                    json_content = decompress_data(document_embedding_results_json_compressed_binary)
                     if len(json_content) == 0:
                         raise HTTPException(status_code=400, detail="Could not retrieve document embedding results.")
                     existing_document = 1
@@ -886,6 +890,7 @@ async def get_text_completions_from_input_prompt(request: TextCompletionRequest,
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
         logger.warning(f"Unauthorized request from client IP {client_ip}")
         raise HTTPException(status_code=403, detail="Unauthorized")
+    request = fill_default_values_in_request(request)    
     context = start_resource_monitoring("get_text_completions_from_input_prompt", request.dict(), client_ip)
     try:
         unique_id = f"text_completion_{hash(request.input_prompt)}_{request.llm_model_name}"
@@ -953,7 +958,7 @@ async def ask_question_about_image_endpoint(
 ) -> List[ImageQuestionResponse]:
     if USE_SECURITY_TOKEN and (token is None or token != SECURITY_TOKEN):
         logger.warning(f"Unauthorized request from client IP {client_ip}")
-        raise HTTPException(status_code=403, detail="Unauthorized")
+        raise HTTPException(status_code=403, detail="Unauthorized")    
     context = start_resource_monitoring("ask_question_about_image", {
         "question": question,
         "llm_model_name": llm_model_name,
@@ -1131,7 +1136,7 @@ async def compute_transcript_with_whisper_from_audio(
 ) -> AudioTranscriptResponse:
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
         logger.warning(f"Unauthorized request from client_ip {client_ip}")
-        raise HTTPException(status_code=403, detail="Unauthorized")
+        raise HTTPException(status_code=403, detail="Unauthorized")    
     if file:
         input_data_binary = await file.read()
         result = magika.identify_bytes(input_data_binary)
