@@ -84,17 +84,17 @@ def update_document_hash_on_remove(target, value, initiator):
 # Request/Response models start here:
 
 class EmbeddingRequest(BaseModel):
-    text: str
-    llm_model_name: str
-    embedding_pooling_method: str
-    corpus_identifier_string: str
+    text: str = ""
+    llm_model_name: str = DEFAULT_MODEL_NAME
+    embedding_pooling_method: str = DEFAULT_EMBEDDING_POOLING_METHOD
+    corpus_identifier_string: str = ""
 
 class SimilarityRequest(BaseModel):
-    text1: str
-    text2: str
-    llm_model_name: str
-    embedding_pooling_method: str
-    similarity_measure: str
+    text1: str = ""
+    text2: str = ""
+    llm_model_name: str = DEFAULT_MODEL_NAME
+    embedding_pooling_method: str = DEFAULT_EMBEDDING_POOLING_METHOD
+    similarity_measure: str = "all"
     @field_validator('similarity_measure')
     def validate_similarity_measure(cls, value):
         valid_measures = ["all", "spearman_rho", "kendall_tau", "approximate_distance_correlation", "jensen_shannon_similarity", "hoeffding_d"]
@@ -103,11 +103,11 @@ class SimilarityRequest(BaseModel):
         return value.lower()
     
 class SemanticSearchRequest(BaseModel):
-    query_text: str
-    number_of_most_similar_strings_to_return: int
-    llm_model_name: str
-    embedding_pooling_method: str
-    corpus_identifier_string: str
+    query_text: str = ""
+    number_of_most_similar_strings_to_return: int = 10
+    llm_model_name: str = DEFAULT_MODEL_NAME
+    embedding_pooling_method: str = DEFAULT_EMBEDDING_POOLING_METHOD
+    corpus_identifier_string: str = ""
         
 class SemanticSearchResponse(BaseModel):
     query_text: str
@@ -116,13 +116,13 @@ class SemanticSearchResponse(BaseModel):
     results: List[dict]  # List of similar strings and their similarity scores using cosine similarity with Faiss (in descending order)
 
 class AdvancedSemanticSearchRequest(BaseModel):
-    query_text: str
-    llm_model_name: str
-    embedding_pooling_method: str
-    corpus_identifier_string: str
-    similarity_filter_percentage: float
-    number_of_most_similar_strings_to_return: int
-    result_sorting_metric: str
+    query_text: str = ""
+    llm_model_name: str = DEFAULT_MODEL_NAME
+    embedding_pooling_method: str = DEFAULT_EMBEDDING_POOLING_METHOD
+    corpus_identifier_string: str = ""
+    similarity_filter_percentage: float = 0.01
+    number_of_most_similar_strings_to_return: int = 10
+    result_sorting_metric: str = "hoeffding_d"
     @field_validator('result_sorting_metric')
     def validate_similarity_measure(cls, value):
         valid_measures = ["all", "spearman_rho", "kendall_tau", "approximate_distance_correlation", "jensen_shannon_similarity", "hoeffding_d"]
@@ -168,12 +168,12 @@ class AllDocumentsResponse(BaseModel):
     documents: List[str]
 
 class TextCompletionRequest(BaseModel):
-    input_prompt: str
-    llm_model_name: str
-    temperature: float
-    grammar_file_string: str
-    number_of_tokens_to_generate: int
-    number_of_completions_to_generate: int
+    input_prompt: str = ""
+    llm_model_name: str = DEFAULT_MODEL_NAME
+    temperature: float = DEFAULT_COMPLETION_TEMPERATURE
+    grammar_file_string: str = ""
+    number_of_tokens_to_generate: int = DEFAULT_MAX_COMPLETION_TOKENS
+    number_of_completions_to_generate: int = DEFAULT_NUMBER_OF_COMPLETIONS_TO_GENERATE
     
 class TextCompletionResponse(BaseModel):
     input_prompt: str
@@ -241,50 +241,3 @@ class AddGrammarRequest(BaseModel):
 
 class AddGrammarResponse(BaseModel):
     valid_grammar_files: List[str]
-
-def fill_default_values_in_request(request):
-    if isinstance(request, EmbeddingRequest):
-        if request.llm_model_name is None:
-            request.llm_model_name = DEFAULT_MODEL_NAME
-        if request.embedding_pooling_method is None:
-            request.embedding_pooling_method = DEFAULT_EMBEDDING_POOLING_METHOD
-        if request.corpus_identifier_string is None:
-            request.corpus_identifier_string = ""
-    elif isinstance(request, SimilarityRequest):
-        if request.llm_model_name is None:
-            request.llm_model_name = DEFAULT_MODEL_NAME
-        if request.embedding_pooling_method is None:
-            request.embedding_pooling_method = DEFAULT_EMBEDDING_POOLING_METHOD
-        if request.similarity_measure is None:
-            request.similarity_measure = "all"
-    elif isinstance(request, SemanticSearchRequest):
-        if request.llm_model_name is None:
-            request.llm_model_name = DEFAULT_MODEL_NAME
-        if request.embedding_pooling_method is None:
-            request.embedding_pooling_method = DEFAULT_EMBEDDING_POOLING_METHOD
-        if request.corpus_identifier_string is None:
-            request.corpus_identifier_string = ""
-    elif isinstance(request, AdvancedSemanticSearchRequest):
-        if request.llm_model_name is None:
-            request.llm_model_name = DEFAULT_MODEL_NAME
-        if request.embedding_pooling_method is None:
-            request.embedding_pooling_method = DEFAULT_EMBEDDING_POOLING_METHOD
-        if request.corpus_identifier_string is None:
-            request.corpus_identifier_string = ""
-        if request.similarity_filter_percentage is None:
-            request.similarity_filter_percentage = 0.01
-        if request.number_of_most_similar_strings_to_return is None:
-            request.number_of_most_similar_strings_to_return = 10
-        if request.result_sorting_metric is None:
-            request.result_sorting_metric = "hoeffding_d"
-    elif isinstance(request, TextCompletionRequest):
-        if request.llm_model_name is None:
-            request.llm_model_name = DEFAULT_MODEL_NAME
-        if request.temperature is None:
-            request.temperature = DEFAULT_COMPLETION_TEMPERATURE
-        if request.grammar_file_string is None:
-            request.grammar_file_string = ""
-        if request.number_of_tokens_to_generate is None:
-            request.number_of_tokens_to_generate = DEFAULT_MAX_COMPLETION_TOKENS
-        if request.number_of_completions_to_generate is None:
-            request.number_of_completions_to_generate = DEFAULT_NUMBER_OF_COMPLETIONS_TO_GENERATE

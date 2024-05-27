@@ -22,7 +22,6 @@ from hashlib import sha3_256
 from urllib.parse import quote
 import numpy as np
 import pandas as pd
-import scipy
 import textract
 import zstandard as zstd
 from sqlalchemy import select
@@ -38,10 +37,8 @@ from llama_cpp import llama_types
 from mutagen import File as MutagenFile
 from magika import Magika
 import httpx
-from sklearn.decomposition import TruncatedSVD, FastICA, FactorAnalysis, NMF
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.decomposition import TruncatedSVD, FastICA, FactorAnalysis
 from sklearn.random_projection import GaussianRandomProjection
-from numpy.linalg import qr, cholesky
 
 logger = setup_logger()
 magika = Magika()
@@ -269,9 +266,8 @@ async def calculate_sentence_embeddings_list(llama, texts: list, embedding_pooli
         raise ValueError("Inconsistent number of embeddings found.")
     list_of_embedding_entry_dicts = []
     cnt = 0
-    for i, current_text in enumerate(texts):  
+    for i, current_text in enumerate(texts):
         current_set_of_embeddings = sentence_embeddings_list[i]['embedding']
-        # Check if `current_set_of_embeddings` is a list of lists or just a list; if it's just a list, then number_of_embeddings will be 1 and we need to convert it to a list of lists
         if isinstance(current_set_of_embeddings[0], list):
             number_of_embeddings = len(current_set_of_embeddings)
         else:
@@ -280,83 +276,54 @@ async def calculate_sentence_embeddings_list(llama, texts: list, embedding_pooli
         logger.info(f"Sentence {i + 1} of {len(texts):,} has {number_of_embeddings:,} embeddings for text '{current_text[:50]}...'")
         embeddings = np.array(current_set_of_embeddings)
         dimension_of_token_embeddings = embeddings.shape[1]
-        if embedding_pooling_method == "means":
-            means = np.mean(embeddings, axis=0)
-            flattened_vector = means.flatten()
-        elif embedding_pooling_method == "means_mins_maxes":
-            if number_of_embeddings == 1:
-                flattened_vector = embeddings[0].flatten()
+        # Ensure embeddings have enough dimensions for the pooling method
+        required_components = {
+            "svd": 2,
+            "svd_first_four": 4,
+            "ica": 2,
+            "factor_analysis": 2,
+            "gaussian_random_projection": 2
+        }
+        if number_of_embeddings > 1:
+            min_components = required_components.get(embedding_pooling_method, 1)
+            if number_of_embeddings < min_components:
+                padding = np.zeros((min_components - number_of_embeddings, dimension_of_token_embeddings))
+                embeddings = np.vstack([embeddings, padding])
+            if embedding_pooling_method == "svd":
+                svd = TruncatedSVD(n_components=2)
+                svd_embeddings = svd.fit_transform(embeddings.T)
+                flattened_vector = svd_embeddings.flatten()
+            elif embedding_pooling_method == "svd_first_four":
+                svd = TruncatedSVD(n_components=4)
+                svd_embeddings = svd.fit_transform(embeddings.T)
+                flattened_vector = svd_embeddings.flatten()
+            elif embedding_pooling_method == "ica":
+                ica = FastICA(n_components=2)
+                ica_embeddings = ica.fit_transform(embeddings.T)
+                flattened_vector = ica_embeddings.flatten()
+            elif embedding_pooling_method == "factor_analysis":
+                fa = FactorAnalysis(n_components=2)
+                fa_embeddings = fa.fit_transform(embeddings.T)
+                flattened_vector = fa_embeddings.flatten()           
+            elif embedding_pooling_method == "gaussian_random_projection":
+                grp = GaussianRandomProjection(n_components=2)
+                grp_embeddings = grp.fit_transform(embeddings.T)
+                flattened_vector = grp_embeddings.flatten()                 
             else:
-                means = np.mean(embeddings, axis=0)
-                mins = np.min(embeddings, axis=0)
-                maxes = np.max(embeddings, axis=0)
-                combined_feature_vector = np.concatenate([means, mins, maxes]).flatten()
-                flattened_vector = combined_feature_vector.flatten()
-        elif embedding_pooling_method == "means_mins_maxes_stds_kurtoses":
-            if number_of_embeddings == 1:
-                flattened_vector = embeddings[0].flatten()
-            else:            
-                means = np.mean(embeddings, axis=0)
-                mins = np.min(embeddings, axis=0)
-                maxes = np.max(embeddings, axis=0)
-                stds = np.std(embeddings, axis=0)
-                kurtoses = scipy.stats.kurtosis(embeddings, axis=0)
-                combined_feature_vector = np.concatenate([means, mins, maxes, stds, kurtoses])
-                flattened_vector = combined_feature_vector.flatten()
-        elif embedding_pooling_method == "svd":
-            if number_of_embeddings == 1:
-                flattened_vector = embeddings[0].flatten()
-            else:            
-                svd = TruncatedSVD(n_components=2)  # Set n_components to 2
-                svd_embeddings = svd.fit_transform(embeddings.T)
-                flattened_vector = svd_embeddings.flatten()
-        elif embedding_pooling_method == "svd_first_four":
-                svd = TruncatedSVD(n_components=4)  # Set n_components to 4
-                svd_embeddings = svd.fit_transform(embeddings.T)
-                flattened_vector = svd_embeddings.flatten()
-        elif embedding_pooling_method == "covariance_matrix":
-            covariance_matrix = np.cov(embeddings.T, rowvar=False)
-            eigenvalues, eigenvectors = np.linalg.eigh(covariance_matrix)
-            flattened_vector = np.concatenate([eigenvalues, eigenvectors.flatten()]).flatten()
-        elif embedding_pooling_method == "qr_decomposition":
-            q, r = qr(embeddings.T)
-            flattened_vector = np.concatenate([q.flatten(), r.flatten()]).flatten()
-        elif embedding_pooling_method == "cholesky_decomposition":
-            try:
-                cholesky_matrix = cholesky(np.cov(embeddings.T, rowvar=False))
-                flattened_vector = cholesky_matrix.flatten()
-            except np.linalg.LinAlgError:
-                flattened_vector = np.zeros((embeddings.shape[1] * embeddings.shape[1],))
-        elif embedding_pooling_method == "ica":
-            ica = FastICA(n_components=2)
-            ica_embeddings = ica.fit_transform(embeddings.T)
-            flattened_vector = ica_embeddings.flatten()
-        elif embedding_pooling_method == "nmf":
-            scaler = MinMaxScaler()
-            scaled_embeddings = scaler.fit_transform(embeddings.T)
-            nmf = NMF(n_components=2)
-            nmf_embeddings = nmf.fit_transform(scaled_embeddings)
-            flattened_vector = nmf_embeddings.flatten()
-        elif embedding_pooling_method == "factor_analysis":
-            fa = FactorAnalysis(n_components=2)
-            fa_embeddings = fa.fit_transform(embeddings.T)
-            flattened_vector = fa_embeddings.flatten()           
-        elif embedding_pooling_method == "gaussian_random_projection":
-            grp = GaussianRandomProjection(n_components=2)
-            grp_embeddings = grp.fit_transform(embeddings.T)
-            flattened_vector = grp_embeddings.flatten()                 
+                raise ValueError(f"Unknown embedding_pooling_method: {embedding_pooling_method}")
+            combined_embedding = flattened_vector.tolist()
         else:
-            raise ValueError(f"Unknown embedding_pooling_method: {embedding_pooling_method}")
-        combined_embedding = flattened_vector.tolist()
+            flattened_vector = embeddings.flatten().tolist()
+            combined_embedding = embeddings.flatten().tolist()
         embedding_length = len(combined_embedding)
         cnt += 1
         embedding_json = json.dumps(combined_embedding)
         embedding_hash = sha3_256(embedding_json.encode('utf-8')).hexdigest()
-        embedding_entry_dict = {'text_index': i, 'text': current_text, 'embedding_pooling_method': embedding_pooling_method,'number_of_token_embeddings_used': number_of_embeddings, 'embedding_length': embedding_length, 'embedding_hash': embedding_hash,'embedding': combined_embedding}
+        embedding_entry_dict = {'text_index': i, 'text': current_text, 'embedding_pooling_method': embedding_pooling_method, 'number_of_token_embeddings_used': number_of_embeddings, 'embedding_length': embedding_length, 'embedding_hash': embedding_hash, 'embedding': combined_embedding}
         list_of_embedding_entry_dicts.append(embedding_entry_dict)
     end_time = datetime.utcnow()
     total_time = (end_time - start_time).total_seconds()
-    logger.info(f"Calculated {len(flattened_vector):,}-dimensional embeddings (relative to the underlying token embedding dimensions of {dimension_of_token_embeddings:,}) for {total_number_of_sentences:,} sentences in a total of {total_time:,.1f} seconds.") 
+    logger.info(f"Calculated {len(flattened_vector):,}-dimensional embeddings (relative to the underlying token embedding dimensions of {dimension_of_token_embeddings:,}) for {total_number_of_sentences:,} sentences in a total of {total_time:,.1f} seconds.")
     logger.info(f"That's an average of {1000*total_time/total_number_of_sentences:,.2f} ms per sentence and {total_number_of_sentences/total_time:,.3f} sentences per second (and {total_characters/(1000*total_time):,.4f} total characters per ms) using pooling method '{embedding_pooling_method}'")
     return list_of_embedding_entry_dicts
 

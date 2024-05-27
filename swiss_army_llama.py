@@ -4,7 +4,7 @@ from logger_config import setup_logger
 from database_functions import AsyncSessionLocal
 from ramdisk_functions import clear_ramdisk
 from misc_utility_functions import  build_faiss_indexes, configure_redis_optimally
-from embeddings_data_models import DocumentEmbedding, ShowLogsIncrementalModel, fill_default_values_in_request
+from embeddings_data_models import DocumentEmbedding, ShowLogsIncrementalModel
 from embeddings_data_models import EmbeddingRequest, SemanticSearchRequest, AdvancedSemanticSearchRequest, SimilarityRequest, TextCompletionRequest, AddGrammarRequest
 from embeddings_data_models import EmbeddingResponse, SemanticSearchResponse, AdvancedSemanticSearchResponse, SimilarityResponse, AllStringsResponse, AllDocumentsResponse, TextCompletionResponse, AudioTranscriptResponse, ImageQuestionResponse, AddGrammarResponse
 from service_functions import get_or_compute_embedding, get_or_compute_transcript, add_model_url, download_file, start_resource_monitoring, end_resource_monitoring, decompress_data
@@ -295,7 +295,7 @@ async def add_new_model(model_url: str, token: str = None) -> Dict[str, Any]:
 The request must contain the following attributes:
 - `text`: The input text for which the embedding vector is to be retrieved.
 - `llm_model_name`: The model used to calculate the embedding (optional, will use the default model if not provided).
-- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four', 'qr_decomposition', 'cholesky_decomposition', 'ica', 'nmf', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
+- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'svd', 'svd_first_four', 'ica', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
 
 ### Example (note that `llm_model_name` is optional):
 ```json
@@ -321,7 +321,6 @@ async def get_embedding_vector_for_string(request: EmbeddingRequest, req: Reques
         logger.warning(f"Unauthorized request from client IP {client_ip}")
         raise HTTPException(status_code=403, detail="Unauthorized")
     try:
-        request = fill_default_values_in_request(request)
         request.text = prepare_string_for_embedding(request.text)
         unique_id = f"get_embedding_{request.text}_{request.llm_model_name}_{request.embedding_pooling_method}"
         lock = await shared_resources.lock_manager.lock(unique_id)
@@ -372,7 +371,6 @@ async def compute_similarity_between_strings(request: SimilarityRequest, req: Re
         raise HTTPException(status_code=403, detail="Unauthorized")
     logger.info(f"Received request: {request}")
     request_time = datetime.utcnow()
-    request = fill_default_values_in_request(request)
     request.text1 = prepare_string_for_embedding(request.text1)
     request.text2 = prepare_string_for_embedding(request.text2)
     similarity_measure = request.similarity_measure.lower()
@@ -437,7 +435,7 @@ async def compute_similarity_between_strings(request: SimilarityRequest, req: Re
 The request must contain the following attributes:
 - `query_text`: The input text for which to find the most similar string.
 - `llm_model_name`: The model used to calculate embeddings.
-- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four', 'qr_decomposition', 'cholesky_decomposition', 'ica', 'nmf', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
+- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'svd', 'svd_first_four', 'ica', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
 - `corpus_identifier_string`: An optional string identifier to restrict the search to a specific corpus.
 - `number_of_most_similar_strings_to_return`: (Optional) The number of most similar strings to return, defaults to 10.
 
@@ -472,7 +470,6 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
         raise HTTPException(status_code=403, detail="Unauthorized")                            
     global faiss_indexes, associated_texts_by_model_and_pooling_method
     request_time = datetime.utcnow()
-    request = fill_default_values_in_request(request)
     request.query_text = prepare_string_for_embedding(request.query_text)
     unique_id = f"semantic_search_{request.query_text}_{request.llm_model_name}_{request.embedding_pooling_method}_{request.corpus_identifier_string}_{request.number_of_most_similar_strings_to_return}"  # Unique ID for this operation
     lock = await shared_resources.lock_manager.lock(unique_id)        
@@ -521,7 +518,10 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
                 total_time = (response_time - request_time).total_seconds()
                 logger.info(f"Finished searching for the most similar string in the FAISS index in {total_time:,.2f} seconds. Found {len(results):,} results, returning the top {num_results:,}.")
                 logger.info(f"Found most similar strings for query string {request.query_text}: {results}")
-                return {"query_text": request.query_text, "corpus_identifier_string": request.corpus_identifier_string,"results": results}  # Return the response matching the SemanticSearchResponse model
+                if len(results) == 0:
+                    logger.info(f"No results found for query string {request.query_text}.")
+                    raise HTTPException(status_code=400, detail=f"No results found for query string {request.query_text} and model {llm_model_name} and pooling method {embedding_pooling_method} and corpus {request.corpus_identifier_string}.")
+                return {"query_text": request.query_text, "corpus_identifier_string": request.corpus_identifier_string, "embedding_pooling_method": embedding_pooling_method, "results": results}  # Return the response matching the SemanticSearchResponse model
             except Exception as e:
                 logger.error(f"An error occurred while processing the request: {e}")
                 logger.error(traceback.format_exc())  # Print the traceback
@@ -547,7 +547,7 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
 The request must contain the following attributes:
 - `query_text`: The input text for which to find the most similar string.
 - `llm_model_name`: The model used to calculate embeddings.
-- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four', 'qr_decomposition', 'cholesky_decomposition', 'ica', 'nmf', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
+- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'svd', 'svd_first_four', 'ica', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
 - `corpus_identifier_string`: An optional string identifier to restrict the search to a specific corpus.
 - `similarity_filter_percentage`: (Optional) The percentage of embeddings to filter based on cosine similarity, defaults to 0.02 (i.e., top 2%).
 - `number_of_most_similar_strings_to_return`: (Optional) The number of most similar strings to return after applying the second similarity measure, defaults to 10.
@@ -586,7 +586,6 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
         raise HTTPException(status_code=403, detail="Unauthorized")
     global faiss_indexes, associated_texts_by_model_and_pooling_method
     request_time = datetime.utcnow()
-    request = fill_default_values_in_request(request)
     request.query_text = prepare_string_for_embedding(request.query_text)   
     unique_id = f"advanced_semantic_search_{request.query_text}_{request.llm_model_name}_{request.embedding_pooling_method}_{request.similarity_filter_percentage}_{request.number_of_most_similar_strings_to_return}"
     lock = await shared_resources.lock_manager.lock(unique_id)        
@@ -651,12 +650,14 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
                 return {"query_text": request.query_text, "corpus_identifier_string": request.corpus_identifier_string, "results": results}
             except Exception as e:
                 logger.error(f"An error occurred while processing the request: {e}")
+                traceback.print_exc()
                 raise HTTPException(status_code=500, detail="Internal Server Error")
         finally:
             await shared_resources.lock_manager.unlock(lock)
     else:
         return {"status": "already processing"}
     
+
 
 @app.post("/get_all_embedding_vectors_for_document/",
     summary="Get Embeddings for a Document",
@@ -668,10 +669,11 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
 - `hash`: SHA3-256 hash of the document file to verify integrity (optional; in lieu of `file`).
 - `size`: Size of the document file in bytes to verify completeness (optional; in lieu of `file`).
 - `llm_model_name`: The model used to calculate embeddings (optional).
-- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four', 'qr_decomposition', 'cholesky_decomposition', 'ica', 'nmf', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
+- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four', 'ica', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
 - `corpus_identifier_string`: An optional string identifier for grouping documents into a specific corpus.
 - `json_format`: The format of the JSON response (optional, see details below).
 - `send_back_json_or_zip_file`: Whether to return a JSON file or a ZIP file containing the embeddings file (optional, defaults to `zip`).
+- `query_text`: An optional query text to perform a semantic search with the same parameters used for the document embedding request.
 - `token`: Security token (optional).
 
 ### JSON Format Options:
@@ -698,8 +700,9 @@ async def get_all_embedding_vectors_for_document(
     embedding_pooling_method: str = DEFAULT_EMBEDDING_POOLING_METHOD,
     corpus_identifier_string: str = "", 
     json_format: str = 'records',
-    token: str = None,
     send_back_json_or_zip_file: str = 'zip',
+    query_text: str = None,
+    token: str = None,
     req: Request = None
 ):
     logger.info(f"Received request with embedding_pooling_method: {embedding_pooling_method}")
@@ -790,6 +793,23 @@ async def get_all_embedding_vectors_for_document(
                         raise HTTPException(status_code=400, detail="Error while computing embeddings for document")
                     finally:
                         end_resource_monitoring(context)
+
+                if query_text:
+                    search_request = SemanticSearchRequest(
+                        query_text=query_text,
+                        llm_model_name=llm_model_name,
+                        embedding_pooling_method=embedding_pooling_method,
+                        corpus_identifier_string=corpus_identifier_string,
+                        number_of_most_similar_strings_to_return=15
+                    )
+                    search_response = await search_stored_embeddings_with_query_string_for_semantic_similarity(search_request, req, token)
+                    search_results = search_response["results"]
+                    json_content_dict = {"document_embedding_results": json.loads(json_content), "semantic_search_results": search_results}
+                    json_content = json.dumps(json_content_dict)
+                else:
+                    json_content_dict = {"document_embedding_results": json.loads(json_content)}
+                    json_content = json.dumps(json_content_dict)
+
             overall_total_time = (datetime.utcnow() - request_time).total_seconds()
             json_content_length = len(json_content)
             if json_content_length > 0:
@@ -801,10 +821,10 @@ async def get_all_embedding_vectors_for_document(
                 else:
                     original_filename_without_extension, _ = os.path.splitext(file.filename if file else os.path.basename(url))
                     json_file_path = f"/tmp/{original_filename_without_extension}.json"
-                    with open(json_file_path, 'wb') as json_file:
+                    with open(json_file_path, 'w') as json_file:
                         json_file.write(json_content)
                     zip_file_path = f"/tmp/{original_filename_without_extension}.zip"
-                    with zipfile.ZipFile(zip_file_path, 'w') as zipf:
+                    with zipfile.ZipFile(zip_file_path, 'w', compression=zipfile.ZIP_DEFLATED) as zipf:
                         zipf.write(json_file_path, os.path.basename(json_file_path))
                     logger.info(f"Returning ZIP response for document containing {len(sentences):,} sentences with model {llm_model_name}; first 100 characters out of {json_content_length:,} total of JSON response: {json_content[:100]}")
                     return FileResponse(zip_file_path, headers={"Content-Disposition": f"attachment; filename={original_filename_without_extension}.zip"})
@@ -891,7 +911,6 @@ async def get_text_completions_from_input_prompt(request: TextCompletionRequest,
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
         logger.warning(f"Unauthorized request from client IP {client_ip}")
         raise HTTPException(status_code=403, detail="Unauthorized")
-    request = fill_default_values_in_request(request)    
     context = start_resource_monitoring("get_text_completions_from_input_prompt", request.dict(), client_ip)
     try:
         unique_id = f"text_completion_{hash(request.input_prompt)}_{request.llm_model_name}"
@@ -1105,7 +1124,7 @@ async def turn_pydantic_model_description_into_bnf_grammar_for_llm(
 - `size`: Size of the audio file in bytes to verify completeness.
 - `compute_embeddings_for_resulting_transcript_document`: Boolean to indicate if document embeddings should be computed (optional, defaults to True).
 - `llm_model_name`: The language model used for computing embeddings (optional, defaults to the default model name).
-- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four', 'qr_decomposition', 'cholesky_decomposition', 'ica', 'nmf', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
+- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'svd', 'svd_first_four', 'ica', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
 - `req`: HTTP Request object for additional request metadata (optional).
 - `token`: Security token for API access (optional).
 - `client_ip`: Client IP for logging and security (optional).

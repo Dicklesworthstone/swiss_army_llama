@@ -11,16 +11,9 @@ The Swiss Army Llama is designed to facilitate and optimize the process of worki
 Some additional useful endpoints are provided, such as computing semantic similarity between submitted text strings. The service leverages a high-performance Rust-based library, `fast_vector_similarity`, to offer a range of similarity measures including `spearman_rho`, `kendall_tau`, `approximate_distance_correlation`, `jensen_shannon_similarity`, and [`hoeffding_d`](https://blogs.sas.com/content/iml/2021/05/03/examples-hoeffding-d.html). Additionally, semantic search across all your cached embeddings is supported using FAISS vector searching. You can either use the built in cosine similarity from FAISS, or supplement this with a second pass that computes the more sophisticated similarity measures for the most relevant subset of the stored vectors found using cosine similarity (see the advanced semantic search endpoint for this functionality).
 
 Also, we now support multiple embedding pooling methods for combining token-level embedding vectors into a single fixed-length embedding vector for any length of input text, including the following:
-   - `means`: Element-wise average of the token embeddings.
-   - `means_mins_maxes`: Concatenation of element-wise mean, min, and max of the token embeddings.
-   - `means_mins_maxes_stds_kurtoses`: Concatenation of element-wise mean, min, max, standard deviation, and kurtosis of the token embeddings.
    - `svd`: Concatenation of the first two singular vectors obtained from the Singular Value Decomposition (SVD) of the token embeddings matrix.
    - `svd_first_four`: Concatenation of the first four singular vectors obtained from the Singular Value Decomposition (SVD) of the token embeddings matrix.
-   - `gram_matrix`: Flattened Gram matrix (dot product of the token embeddings matrix with its transpose).
-   - `qr_decomposition`: Concatenation of the flattened Q and R matrices from QR decomposition of the token embeddings.
-   - `cholesky_decomposition`: Flattened lower triangular matrix from Cholesky decomposition of the covariance matrix of the token embeddings.
    - `ica`: Flattened independent components obtained from Independent Component Analysis (ICA) of the token embeddings.
-   - `nmf`: Flattened components obtained from Non-Negative Matrix Factorization (NMF) of the token embeddings.
    - `factor_analysis`: Flattened factors obtained from Factor Analysis of the token embeddings.
    - `gaussian_random_projection`: Flattened embeddings obtained from Gaussian Random Projection of the token embeddings.
 
@@ -694,50 +687,22 @@ The primary goal of these pooling methods is to retain as much useful informatio
 
 #### Explanation of Pooling Methods
 
-1. **Means**:
-   - **How it works**: Computes the element-wise average of the token embeddings.
-   - **Rationale**: The mean pooling method provides a simple yet effective way to summarize the central tendency of the token embeddings, capturing the overall semantic content of the text.
-
-2. **Means_Mins_Maxes**:
-   - **How it works**: Concatenates the element-wise mean, min, and max of the token embeddings.
-   - **Rationale**: This method captures the central tendency (mean) as well as the range (min and max) of the embeddings, providing a richer representation by considering the distribution of values.
-
-3. **Means_Mins_Maxes_Stds_Kurtoses**:
-   - **How it works**: Concatenates the element-wise mean, min, max, standard deviation, and kurtosis of the token embeddings.
-   - **Rationale**: This method captures various statistical properties of the embeddings, including their central tendency, variability, and distribution shape, offering a comprehensive summary of the token embeddings.
-
-4. **SVD (Singular Value Decomposition)**:
+1. **SVD (Singular Value Decomposition)**:
    - **How it works**: Concatenates the first two singular vectors obtained from the SVD of the token embeddings matrix.
    - **Rationale**: SVD is a dimensionality reduction technique that captures the most important features of the data. Using the first two singular vectors provides a compact representation that retains significant information.
 
-5. **SVD_First_Four**:
+2. **SVD_First_Four**:
    - **How it works**: Uses the first four singular vectors obtained from the SVD of the token embeddings matrix.
    - **Rationale**: By using more singular vectors, this method captures more of the variance in the data, providing a richer representation while still reducing dimensionality.
 
-6. **Gram_Matrix**:
-   - **How it works**: Computes the Gram matrix (dot product of the embeddings matrix with its transpose) and flattens it.
-   - **Rationale**: The Gram matrix captures the pairwise similarities between token embeddings, providing a summary of their relationships.
-
-7. **QR_Decomposition**:
-   - **How it works**: Performs QR decomposition on the embeddings matrix and concatenates the flattened Q and R matrices.
-   - **Rationale**: QR decomposition provides an orthogonal basis (Q) and upper triangular matrix (R), summarizing the embeddings in terms of these basis vectors and their coefficients.
-
-8. **Cholesky_Decomposition**:
-    - **How it works**: Performs Cholesky decomposition on the covariance matrix of the embeddings and flattens the resulting matrix.
-    - **Rationale**: This method factors the covariance matrix into a lower triangular matrix, capturing the structure of the variance in the embeddings.
-
-9. **ICA (Independent Component Analysis)**:
+3. **ICA (Independent Component Analysis)**:
     - **How it works**: Applies ICA to the embeddings matrix to find statistically independent components, then flattens the result.
     - **Rationale**: ICA is useful for identifying independent sources in the data, providing a representation that highlights these independent features.
 
-10. **NMF (Non-Negative Matrix Factorization)**:
-    - **How it works**: Applies NMF to the embeddings matrix and flattens the result.
-    - **Rationale**: NMF finds parts-based representations by factorizing the data into non-negative components, useful for interpretability and feature extraction.
-
-11. **Factor_Analysis**:
+4. **Factor_Analysis**:
     - **How it works**: Applies factor analysis to the embeddings matrix to identify underlying factors, then flattens the result.
     - **Rationale**: Factor analysis models the data in terms of latent factors, providing a summary that captures these underlying influences.
 
-12. **Gaussian_Random_Projection**:
+5. **Gaussian_Random_Projection**:
     - **How it works**: Applies Gaussian random projection to reduce the dimensionality of the embeddings, then flattens the result.
     - **Rationale**: This method provides a fast and efficient way to reduce dimensionality while preserving the pairwise distances between points, useful for large datasets.
