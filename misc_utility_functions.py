@@ -119,7 +119,7 @@ def configure_redis_optimally(redis_host='localhost', redis_port=6379, maxmemory
             raise
     set_config('maxmemory', maxmemory)
     set_config('maxmemory-policy', 'allkeys-lru')
-    max_clients = os.cpu_count() * 1000
+    max_clients = min(os.cpu_count() * 1000, 50000)
     set_config('maxclients', max_clients)
     set_config('timeout', 300)
     set_config('save', '900 1 300 10 60 10000')

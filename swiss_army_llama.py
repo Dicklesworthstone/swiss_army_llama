@@ -483,7 +483,7 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
             llm_model_name = request.llm_model_name
             embedding_pooling_method = request.embedding_pooling_method
             num_results = request.number_of_most_similar_strings_to_return
-            num_results_before_corpus_filter = num_results*100
+            num_results_before_corpus_filter = num_results*25
             total_entries = len(associated_texts_by_model_and_pooling_method[llm_model_name][embedding_pooling_method])  # Get the total number of entries for the model and pooling method
             num_results = min(num_results, total_entries)  # Ensure num_results doesn't exceed the total number of entries
             num_results_before_corpus_filter = min(num_results_before_corpus_filter, total_entries)  # Ensure num_results_before_corpus_filter doesn't exceed the total number of entries
@@ -591,6 +591,7 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
     lock = await shared_resources.lock_manager.lock(unique_id)        
     if lock.valid:
         try:                
+            context = start_resource_monitoring("advanced_search_stored_embeddings_with_query_string_for_semantic_similarity", request.dict(), req.client.host if req else "localhost")            
             faiss_indexes, associated_texts_by_model_and_pooling_method = await build_faiss_indexes(force_rebuild=True)
             try:
                 faiss_index = faiss_indexes[(request.llm_model_name, request.embedding_pooling_method)]
@@ -598,7 +599,7 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
                 raise HTTPException(status_code=400, detail=f"No FAISS index found for model: {request.llm_model_name} and pooling method: {request.embedding_pooling_method}")            
             llm_model_name = request.llm_model_name
             embedding_pooling_method = request.embedding_pooling_method
-            num_results_before_corpus_filter = request.number_of_most_similar_strings_to_return * 100
+            num_results_before_corpus_filter = request.number_of_most_similar_strings_to_return*25
             logger.info(f"Received request to find most similar strings for query text: `{request.query_text}` using model: {llm_model_name}")
             try:
                 logger.info(f"Computing embedding for input text: {request.query_text}")
@@ -654,6 +655,7 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
                 raise HTTPException(status_code=500, detail="Internal Server Error")
         finally:
             await shared_resources.lock_manager.unlock(lock)
+            end_resource_monitoring(context)            
     else:
         return {"status": "already processing"}
     
@@ -766,13 +768,26 @@ async def get_all_embedding_vectors_for_document(
                     if len(json_content) == 0:
                         raise HTTPException(status_code=400, detail="Could not retrieve document embedding results.")
                     existing_document = 1
+                    document_embedding_request = {}
                 else:
+                    document_embedding_request = {}
                     existing_document = 0
                     with open(temp_file_path, 'rb') as f:
                         input_data_binary = f.read()
                     result = magika.identify_bytes(input_data_binary)
                     mime_type = result.output.mime_type
                     sentences, thousands_of_input_words = await parse_submitted_document_file_into_sentence_strings_func(temp_file_path, mime_type)
+                    document_embedding_request['mime_type'] = mime_type
+                    document_embedding_request['sentences'] = sentences
+                    document_embedding_request['total_number_of_sentences'] = len(sentences)
+                    document_embedding_request['total_words'] = sum(len(sentence.split()) for sentence in sentences)
+                    document_embedding_request['total_characters'] = sum(len(sentence) for sentence in sentences)
+                    document_embedding_request['thousands_of_input_words'] = thousands_of_input_words
+                    document_embedding_request['file_size_mb'] = os.path.getsize(temp_file_path) / (1024 * 1024)
+                    document_embedding_request['corpus_identifier_string'] = corpus_identifier_string
+                    document_embedding_request['embedding_pooling_method'] = embedding_pooling_method
+                    document_embedding_request['llm_model_name'] = llm_model_name
+                    document_embedding_request['document_file_hash'] = document_file_hash
                     if thousands_of_input_words > MAX_THOUSANDS_OF_WORDs_FOR_DOCUMENT_EMBEDDING:
                         raise HTTPException(status_code=400, detail=f"Document contains ~{int(thousands_of_input_words*1000):,}, more than the maximum of {MAX_THOUSANDS_OF_WORDs_FOR_DOCUMENT_EMBEDDING*1000:,} words, which would take too long to compute embeddings for. Please submit a smaller document.") 
                     first_10_words_of_input_text = ' '.join(' '.join(sentences).split()[:10])
@@ -787,29 +802,45 @@ async def get_all_embedding_vectors_for_document(
                     try:
                         json_content = await compute_embeddings_for_document(sentences=sentences, llm_model_name=llm_model_name, embedding_pooling_method=embedding_pooling_method, corpus_identifier_string=corpus_identifier_string, client_ip=client_ip, document_file_hash=document_file_hash, file=file, original_file_content=input_data_binary, json_format=json_format)
                         logger.info(f"Done getting all regular embeddings for document containing {len(sentences):,} sentences with model {llm_model_name} and embedding pooling method {embedding_pooling_method} and corpus {corpus_identifier_string}")
+                
                     except Exception as e:
                         logger.error(f"Error while computing embeddings for document: {e}")
                         traceback.print_exc()
                         raise HTTPException(status_code=400, detail="Error while computing embeddings for document")
                     finally:
                         end_resource_monitoring(context)
-
-                if query_text:
+            if query_text:
+                use_advanced_semantic_search = 0
+                if use_advanced_semantic_search:
+                    search_request = AdvancedSemanticSearchRequest(
+                        query_text=query_text,
+                        llm_model_name=llm_model_name,
+                        embedding_pooling_method=embedding_pooling_method,
+                        corpus_identifier_string=corpus_identifier_string,
+                        similarity_filter_percentage=0.01,
+                        result_sorting_metric="hoeffding_d",
+                        number_of_most_similar_strings_to_return=10
+                    )
+                    logger.info(f"Performing advanced semantic search for model {llm_model_name} and pooling method {embedding_pooling_method}...")
+                    search_response = await advanced_search_stored_embeddings_with_query_string_for_semantic_similarity(search_request, req, token)
+                    search_results = search_response["results"]
+                else:
                     search_request = SemanticSearchRequest(
                         query_text=query_text,
                         llm_model_name=llm_model_name,
                         embedding_pooling_method=embedding_pooling_method,
                         corpus_identifier_string=corpus_identifier_string,
-                        number_of_most_similar_strings_to_return=15
+                        number_of_most_similar_strings_to_return=10
                     )
+                    logger.info(f"Performing semantic search for model {llm_model_name} and pooling method {embedding_pooling_method}...")
                     search_response = await search_stored_embeddings_with_query_string_for_semantic_similarity(search_request, req, token)
                     search_results = search_response["results"]
-                    json_content_dict = {"document_embedding_results": json.loads(json_content), "semantic_search_results": search_results}
-                    json_content = json.dumps(json_content_dict)
-                else:
-                    json_content_dict = {"document_embedding_results": json.loads(json_content)}
-                    json_content = json.dumps(json_content_dict)
-
+                logger.info(f"Advanced semantic search completed. Results for query text '{query_text}'\n: {search_results}")
+                json_content_dict = {"document_embedding_request": document_embedding_request, "document_embedding_results": json.loads(json_content), "semantic_search_request": dict(search_request), "semantic_search_results": search_results} 
+                json_content = json.dumps(json_content_dict)
+            else:
+                json_content_dict = {"document_embedding_request": document_embedding_request, "document_embedding_results": json.loads(json_content)}
+                json_content = json.dumps(json_content_dict)                                
             overall_total_time = (datetime.utcnow() - request_time).total_seconds()
             json_content_length = len(json_content)
             if json_content_length > 0:

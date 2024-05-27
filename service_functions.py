@@ -289,7 +289,14 @@ async def calculate_sentence_embeddings_list(llama, texts: list, embedding_pooli
             if number_of_embeddings < min_components:
                 padding = np.zeros((min_components - number_of_embeddings, dimension_of_token_embeddings))
                 embeddings = np.vstack([embeddings, padding])
-            if embedding_pooling_method == "svd":
+            if embedding_pooling_method == "mean":
+                element_wise_mean = np.mean(embeddings, axis=0)
+                flattened_vector = element_wise_mean.flatten()
+            elif embedding_pooling_method == "mins_maxes":
+                element_wise_min = np.min(embeddings, axis=0)
+                element_wise_max = np.max(embeddings, axis=0)
+                flattened_vector = np.concatenate([element_wise_min, element_wise_max], axis=0)
+            elif embedding_pooling_method == "svd":
                 svd = TruncatedSVD(n_components=2)
                 svd_embeddings = svd.fit_transform(embeddings.T)
                 flattened_vector = svd_embeddings.flatten()
@@ -995,11 +1002,20 @@ def start_resource_monitoring(endpoint_name: str, input_data: Dict[str, Any], cl
             "num_characters_in_question": len(question),
             "llm_model_name": input_data.get("llm_model_name", ""),
             "temperature": input_data.get("temperature", 0.7),
-            "grammar_file_string": input_data.get("grammar_file_string", ""),
             "number_of_tokens_to_generate": input_data.get("number_of_tokens_to_generate", 256),
             "number_of_completions_to_generate": input_data.get("number_of_completions_to_generate", 1),
             "image_filename": input_data.get("image").filename if input_data.get("image") else ""
         }
+    elif endpoint_name == "advanced_search_stored_embeddings_with_query_string_for_semantic_similarity":
+        request_details = {
+            "query_text": input_data.get("query_text", ""),
+            "llm_model_name": input_data.get("llm_model_name", ""),
+            "embedding_pooling_method": input_data.get("embedding_pooling_method", ""),
+            "corpus_identifier_string": input_data.get("corpus_identifier_string", ""),
+            "similarity_filter_percentage": input_data.get("similarity_filter_percentage", 0.02),
+            "number_of_most_similar_strings_to_return": input_data.get("number_of_most_similar_strings_to_return", 10),
+            "result_sorting_metric": input_data.get("result_sorting_metric", "hoeffding_d")
+        }        
     context = {
         "endpoint_name": endpoint_name,
         "start_time": start_time,

@@ -125,7 +125,7 @@ class AdvancedSemanticSearchRequest(BaseModel):
     result_sorting_metric: str = "hoeffding_d"
     @field_validator('result_sorting_metric')
     def validate_similarity_measure(cls, value):
-        valid_measures = ["all", "spearman_rho", "kendall_tau", "approximate_distance_correlation", "jensen_shannon_similarity", "hoeffding_d"]
+        valid_measures = ["spearman_rho", "kendall_tau", "approximate_distance_correlation", "jensen_shannon_similarity", "hoeffding_d"]
         if value.lower() not in valid_measures:
             raise ValueError(f"Invalid similarity measure. Supported measures are: {', '.join(valid_measures)}")
         return value.lower()
