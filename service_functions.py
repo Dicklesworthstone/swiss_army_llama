@@ -1,6 +1,6 @@
 from logger_config import setup_logger
 import shared_resources
-from shared_resources import load_model, text_completion_model_cache, is_gpu_available
+from shared_resources import load_model, text_completion_model_cache, is_gpu_available, evict_model_from_gpu
 from database_functions import AsyncSessionLocal, execute_with_retry
 from misc_utility_functions import clean_filename_for_url_func,  FakeUploadFile, sophisticated_sentence_splitter, merge_transcript_segments_into_combined_text, suppress_stdout_stderr, image_to_base64_data_uri, process_image, find_clip_model_path
 from embeddings_data_models import TextEmbedding, DocumentEmbedding, Document, AudioTranscript
@@ -483,7 +483,7 @@ def load_text_completion_model(llm_model_name: str, raise_http_exception: bool =
         matching_files.sort(key=os.path.getmtime, reverse=True)
         model_file_path = matching_files[0]
         is_llava_multimodal_model = 'llava' in llm_model_name and 'mmproj' not in llm_model_name
-        chat_handler = None # Determine the appropriate chat handler based on the model name
+        chat_handler = None
         if 'llava' in llm_model_name:
             clip_model_path = find_clip_model_path(llm_model_name)
             if clip_model_path is None:
@@ -491,30 +491,32 @@ def load_text_completion_model(llm_model_name: str, raise_http_exception: bool =
             chat_handler = Llava16ChatHandler(clip_model_path=clip_model_path)
         with suppress_stdout_stderr():
             gpu_info = is_gpu_available()
-            if gpu_info:
-                num_gpus = gpu_info['num_gpus']
-                if num_gpus > 1:
-                    llama_split_mode = 2 # 2, // split rows across GPUs | 1, // split layers and KV across GPUs
-                else:
-                    llama_split_mode = 0
-            else:
-                num_gpus = 0
-            model_instance = Llama(
-                model_path=model_file_path,
-                embedding=True if is_llava_multimodal_model else False,
-                n_ctx=TEXT_COMPLETION_CONTEXT_SIZE_IN_TOKENS,
-                flash_attn=USE_FLASH_ATTENTION,
-                verbose=USE_VERBOSE,
-                llama_split_mode=llama_split_mode,
-                n_gpu_layers=-1 if gpu_info['gpu_found'] else 0,
-                clip_model_path=clip_model_path if is_llava_multimodal_model else None,
-                chat_handler=chat_handler
-            )
+            llama_split_mode = 2 if gpu_info and gpu_info['num_gpus'] > 1 else 0
+            while True:
+                try:
+                    model_instance = Llama(
+                        model_path=model_file_path,
+                        embedding=True if is_llava_multimodal_model else False,
+                        n_ctx=TEXT_COMPLETION_CONTEXT_SIZE_IN_TOKENS,
+                        flash_attn=USE_FLASH_ATTENTION,
+                        verbose=USE_VERBOSE,
+                        llama_split_mode=llama_split_mode,
+                        n_gpu_layers=-1 if gpu_info['gpu_found'] else 0,
+                        clip_model_path=clip_model_path if is_llava_multimodal_model else None,
+                        chat_handler=chat_handler
+                    )
+                    break
+                except ValueError as e:
+                    if "cudaMalloc failed: out of memory" in str(e):
+                        evict_model_from_gpu()
+                    else:
+                        raise
         text_completion_model_cache[llm_model_name] = model_instance
+        shared_resources.loaded_models[llm_model_name] = model_instance
         return model_instance
     except TypeError as e:
         logger.error(f"TypeError occurred while loading the model: {e}")
-        logger.error(traceback.format_exc())        
+        logger.error(traceback.format_exc())
         raise
     except Exception as e:
         logger.error(f"Exception occurred while loading the model: {e}")
