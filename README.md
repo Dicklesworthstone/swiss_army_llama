@@ -39,7 +39,7 @@ To run it natively (not using Docker) in a Python venv (recommended!), you can u
 
 ```bash
 sudo apt-get update
-sudo apt-get install libxml2-dev libxslt1-dev antiword unrtf poppler-utils pstotext tesseract-ocr flac ffmpeg lame libmad0 libsox-fmt-mp3 sox libjpeg-dev swig redis-server -y
+sudo apt-get install build-essential libxml2-dev libxslt1-dev antiword unrtf poppler-utils pstotext tesseract-ocr flac ffmpeg lame libmad0 libsox-fmt-mp3 sox libjpeg-dev swig redis-server libpoppler-cpp-dev pkg-config -y
 sudo systemctl enable redis-server
 sudo systemctl start redis
 git clone https://github.com/Dicklesworthstone/swiss_army_llama
