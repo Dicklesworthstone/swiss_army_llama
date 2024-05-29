@@ -17,13 +17,11 @@ from typing import List, Tuple, Dict
 from decouple import config
 from fastapi import HTTPException
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from collections import OrderedDict
 
 logger = setup_logger()
 
-embedding_model_cache = OrderedDict()  # Model cache to store loaded models with LRU eviction
-text_completion_model_cache = OrderedDict()  # Model cache to store loaded text completion models with LRU eviction
-loaded_models = OrderedDict()  # Track loaded models to manage GPU memory
+embedding_model_cache = {} # Model cache to store loaded models
+text_completion_model_cache = {} # Model cache to store loaded text completion models
 
 SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT = config("SWISS_ARMY_LLAMA_SERVER_LISTEN_PORT", default=8089, cast=int)
 DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="openchat_v3.2_super", cast=str) 
@@ -114,7 +112,7 @@ redis = None
 lock_manager = None
 
 def download_models() -> Tuple[List[str], List[Dict[str, str]]]:
-    download_status = []
+    download_status = []    
     json_path = os.path.join(BASE_DIRECTORY, "model_urls.json")
     if not os.path.exists(json_path):
         initial_model_urls = [
@@ -150,7 +148,7 @@ def download_models() -> Tuple[List[str], List[Dict[str, str]]]:
         status = {"url": url, "status": "success", "message": "File already exists."}
         filename = os.path.join(models_dir, model_name_with_extension)
         try:
-            with lock.acquire(timeout=1200):  # Wait up to 20 minutes for the file to be downloaded before returning failure
+            with lock.acquire(timeout=1200): # Wait up to 20 minutes for the file to be downloaded before returning failure
                 if not os.path.exists(filename):
                     logger.info(f"Downloading model {model_name_with_extension} from {url}...")
                     urllib.request.urlretrieve(url, filename)
@@ -173,12 +171,6 @@ def download_models() -> Tuple[List[str], List[Dict[str, str]]]:
     logger.info("Model downloads completed.")
     return model_names, download_status
 
-def evict_model_from_gpu():
-    if loaded_models:
-        evicted_model_name, evicted_model_instance = loaded_models.popitem(last=False)
-        del evicted_model_instance
-        logger.info(f"Evicted model {evicted_model_name} from GPU memory")
-        
 def load_model(llm_model_name: str, raise_http_exception: bool = True):
     global USE_VERBOSE
     model_instance = None
@@ -193,33 +185,16 @@ def load_model(llm_model_name: str, raise_http_exception: bool = True):
         matching_files.sort(key=os.path.getmtime, reverse=True)
         model_file_path = matching_files[0]
         gpu_info = is_gpu_available()
-        is_llava_multimodal_model = 'llava' in llm_model_name
-        with suppress_stdout_stderr():
-            if is_llava_multimodal_model:
-                pass
+        if 'llava' in llm_model_name:
+            is_llava_multimodal_model = 1
+        else:
+            is_llava_multimodal_model = 0
+        if not is_llava_multimodal_model:
+            if gpu_info['gpu_found']:
+                model_instance = llama_cpp.Llama(model_path=model_file_path, embedding=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, verbose=USE_VERBOSE, n_gpu_layers=-1) # Load the model with GPU acceleration
             else:
-                while True:
-                    try:
-                        if gpu_info['gpu_found']:
-                            model_instance = llama_cpp.Llama(
-                                model_path=model_file_path, embedding=True,
-                                n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS,
-                                verbose=USE_VERBOSE, n_gpu_layers=-1
-                            )  # Load the model with GPU acceleration
-                        else:
-                            model_instance = llama_cpp.Llama(
-                                model_path=model_file_path, embedding=True,
-                                n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS,
-                                verbose=USE_VERBOSE
-                            )  # Load the model without GPU acceleration
-                        break
-                    except ValueError as e:
-                        if "cudaMalloc failed: out of memory" in str(e):
-                            evict_model_from_gpu()
-                        else:
-                            raise
+                model_instance = llama_cpp.Llama(model_path=model_file_path, embedding=True, n_ctx=LLM_CONTEXT_SIZE_IN_TOKENS, verbose=USE_VERBOSE) # Load the model without GPU acceleration        
             embedding_model_cache[llm_model_name] = model_instance
-            loaded_models[llm_model_name] = model_instance
         return model_instance
     except TypeError as e:
         logger.error(f"TypeError occurred while loading the model: {e}")
@@ -231,5 +206,3 @@ def load_model(llm_model_name: str, raise_http_exception: bool = True):
             raise HTTPException(status_code=404, detail="Model file not found")
         else:
             raise FileNotFoundError(f"No model file found matching: {llm_model_name}")
-
-        
