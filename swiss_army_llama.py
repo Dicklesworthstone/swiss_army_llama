@@ -3,7 +3,7 @@ from shared_resources import initialize_globals, download_models, is_gpu_availab
 from logger_config import setup_logger
 from database_functions import AsyncSessionLocal
 from ramdisk_functions import clear_ramdisk
-from misc_utility_functions import  build_faiss_indexes, configure_redis_optimally
+from misc_utility_functions import  build_faiss_indexes, configure_redis_optimally, sanitize_filename
 from embeddings_data_models import DocumentEmbedding, ShowLogsIncrementalModel
 from embeddings_data_models import EmbeddingRequest, SemanticSearchRequest, AdvancedSemanticSearchRequest, SimilarityRequest, TextCompletionRequest, AddGrammarRequest
 from embeddings_data_models import EmbeddingResponse, SemanticSearchResponse, AdvancedSemanticSearchResponse, SimilarityResponse, AllStringsResponse, AllDocumentsResponse, TextCompletionResponse, AudioTranscriptResponse, ImageQuestionResponse, AddGrammarResponse
@@ -22,6 +22,7 @@ import random
 import tempfile
 import traceback
 import zipfile
+from io import BytesIO
 from pathlib import Path
 from datetime import datetime
 from hashlib import sha3_256
@@ -31,7 +32,7 @@ import numpy as np
 from decouple import config
 import uvicorn
 import fastapi
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form, Query
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from contextlib import asynccontextmanager
 from sqlalchemy import select
@@ -41,6 +42,8 @@ import faiss
 import fast_vector_similarity as fvs
 import uvloop
 from magika import Magika
+import ChatTTS
+from pydub import AudioSegment
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 logger = setup_logger()
@@ -1461,3 +1464,56 @@ async def convert_document_to_sentences(
     finally:
         os.remove(temp_file_path)
     return JSONResponse(content=result)
+
+
+
+@app.get("/generate_tts_audio/",
+    summary="Generate Text-to-Speech Audio",
+    description="""Generate a text-to-speech audio file from a given input text string.
+
+### Parameters:
+- `text`: The input text string to convert into speech. This is a required query parameter.
+
+### Example Request:
+The request should be a GET request with the `text` query parameter, for example:
+```
+/generate_tts_audio/?text=This+is+a+sample+text
+```
+
+### Response:
+The response will include the generated audio file in MP3 format.
+
+### Example Response:
+The endpoint will return the MP3 file as an audio response.
+""",
+    response_description="An MP3 audio file generated from the input text.")
+async def generate_tts_audio(text: str = Query(..., description="The input text string to convert into speech")):
+    try:
+        chat = ChatTTS.Chat()
+        chat.load_models()
+
+        # Infer the audio from the provided text
+        texts = [text]
+        wavs = chat.infer(texts, use_decoder=True)
+
+        # Ensure the WAV data is in bytes format and has a correct sample rate
+        if not isinstance(wavs[0], bytes):
+            raise ValueError("Generated WAV data is not in bytes format.")
+
+        # Save WAV data to a temporary BytesIO buffer
+        wav_buffer = BytesIO(wavs[0])
+        audio = AudioSegment.from_raw(wav_buffer, sample_width=2, frame_rate=24000, channels=1)
+
+        audio_output_file_name = sanitize_filename(text)
+        wav_path = f"/tmp/{audio_output_file_name}.wav"
+        mp3_path = f"/tmp/{audio_output_file_name}.mp3"
+
+        # Export to WAV file
+        audio.export(wav_path, format="wav")
+
+        # Convert WAV to MP3, keeping the original sample rate
+        audio.export(mp3_path, format="mp3", parameters=["-ar", "24000"])
+
+        return FileResponse(mp3_path, media_type="audio/mpeg", filename=f"{audio_output_file_name}.mp3")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred: {e}")

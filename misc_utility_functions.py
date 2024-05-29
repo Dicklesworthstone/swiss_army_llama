@@ -332,3 +332,6 @@ def find_clip_model_path(llm_model_name: str) -> Optional[str]:
         logger.error(f"No mmproj file found matching: {mmproj_model_name}")
         return None
     return mmproj_files[0]    
+
+def sanitize_filename(text):
+    return re.sub(r'_{2,}', '_', re.sub(r'\s+', '_', text[:30]))

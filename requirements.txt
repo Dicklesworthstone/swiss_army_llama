@@ -2,6 +2,7 @@ aioredis
 aioredlock
 aiosqlite
 apscheduler
+ChatTTS @ git+https://github.com/Dicklesworthstone/ChatTTS
 faiss-cpu
 fast_vector_similarity
 fastapi
@@ -12,11 +13,13 @@ llama-cpp-python
 magika
 mutagen
 nvgpu
+openai
 pandas
 pillow
 psutil
 pydantic
 PyPDF2
+pydub
 pytest
 python-decouple
 python-multipart
