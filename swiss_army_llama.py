@@ -1206,6 +1206,8 @@ async def compute_transcript_with_whisper_from_audio(
             new_temp_file_path = temp_file_path + f".{detected_data_type}"
             os.rename(temp_file_path, new_temp_file_path)
             temp_file_path = new_temp_file_path
+        # Create a new UploadFile object using the downloaded file path
+        file = UploadFile(filename=os.path.basename(temp_file_path), file=open(temp_file_path, 'rb'))
     else:
         raise HTTPException(status_code=400, detail="Invalid input. Provide either a file or URL with hash and size.")
     audio_file_size_mb = os.path.getsize(temp_file_path) / (1024 * 1024)
