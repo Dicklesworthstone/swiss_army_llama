@@ -96,11 +96,6 @@ async def initialize_globals():
     elif USE_RAMDISK:
         setup_ramdisk()
     list_of_downloaded_model_names, download_status = download_models()
-    for llm_model_name in list_of_downloaded_model_names:
-        try:
-            load_model(llm_model_name, raise_http_exception=False)
-        except FileNotFoundError as e:
-            logger.error(e)
     faiss_indexes, associated_texts_by_model_and_pooling_method = await build_faiss_indexes()
 
 
