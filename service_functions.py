@@ -499,17 +499,28 @@ def load_text_completion_model(llm_model_name: str, raise_http_exception: bool =
                     llama_split_mode = 0
             else:
                 num_gpus = 0
-            model_instance = Llama(
-                model_path=model_file_path,
-                embedding=True if is_llava_multimodal_model else False,
-                n_ctx=TEXT_COMPLETION_CONTEXT_SIZE_IN_TOKENS,
-                flash_attn=USE_FLASH_ATTENTION,
-                verbose=USE_VERBOSE,
-                llama_split_mode=llama_split_mode,
-                n_gpu_layers=-1 if gpu_info['gpu_found'] else 0,
-                clip_model_path=clip_model_path if is_llava_multimodal_model else None,
-                chat_handler=chat_handler
-            )
+            try:                
+                model_instance = Llama(
+                    model_path=model_file_path,
+                    embedding=True if is_llava_multimodal_model else False,
+                    n_ctx=TEXT_COMPLETION_CONTEXT_SIZE_IN_TOKENS,
+                    flash_attn=USE_FLASH_ATTENTION,
+                    verbose=USE_VERBOSE,
+                    llama_split_mode=llama_split_mode,
+                    n_gpu_layers=-1 if gpu_info['gpu_found'] else 0,
+                    clip_model_path=clip_model_path if is_llava_multimodal_model else None,
+                    chat_handler=chat_handler
+                )
+            except Exception as e:  # noqa: F841
+                model_instance = Llama(
+                    model_path=model_file_path,
+                    embedding=True if is_llava_multimodal_model else False,
+                    n_ctx=TEXT_COMPLETION_CONTEXT_SIZE_IN_TOKENS,
+                    flash_attn=USE_FLASH_ATTENTION,
+                    verbose=USE_VERBOSE,
+                    clip_model_path=clip_model_path if is_llava_multimodal_model else None,
+                    chat_handler=chat_handler
+                )                
         text_completion_model_cache[llm_model_name] = model_instance
         return model_instance
     except TypeError as e:
