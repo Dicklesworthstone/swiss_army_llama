@@ -13,6 +13,7 @@ import shutil
 import psutil
 import glob
 import json
+import io
 import zipfile
 import tempfile
 import traceback
@@ -953,8 +954,14 @@ async def get_or_compute_transcript(file: UploadFile,
     else:
         return {"status": "already processing"}               
 
-def get_audio_duration_seconds(file_path: str) -> float:
-    audio = MutagenFile(file_path)
+def get_audio_duration_seconds(audio_input) -> float:
+    if isinstance(audio_input, bytes):
+        audio_file = io.BytesIO(audio_input)
+        audio = MutagenFile(audio_file)
+    elif isinstance(audio_input, str):
+        audio = MutagenFile(audio_input)
+    else:
+        raise ValueError("audio_input must be either bytes or a file path string.")
     if audio is None or not hasattr(audio.info, 'length'):
         raise ValueError("Could not determine the length of the audio file.")
     return audio.info.length
