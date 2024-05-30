@@ -1209,9 +1209,11 @@ async def compute_transcript_with_whisper_from_audio(
     else:
         raise HTTPException(status_code=400, detail="Invalid input. Provide either a file or URL with hash and size.")
     audio_file_size_mb = os.path.getsize(temp_file_path) / (1024 * 1024)
+    logger.info(f"Now determining the duration of the audio file with path {temp_file_path} which is {audio_file_size_mb:,.2f} MB in size...")
+    audio_duration_seconds = get_audio_duration_seconds(temp_file_path)
     input_data = {
         "file_size_mb": audio_file_size_mb,
-        "audio_duration_seconds": round(get_audio_duration_seconds(temp_file_path), 2)
+        "audio_duration_seconds": round(audio_duration_seconds, 2)
     }
     context = start_resource_monitoring("compute_transcript_with_whisper_from_audio", input_data, req.client.host if req else "localhost")
     try:
