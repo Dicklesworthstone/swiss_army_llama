@@ -763,6 +763,12 @@ def convert_to_pydantic_response(audio_transcript, compute_embeddings_for_result
         audio_transcript_dict['embedding_pooling_method'] = ""
     return audio_transcript_dict
 
+def generate_download_url(audio_file_name: str, req: Request) -> str:
+    sanitized_file_name = clean_filename_for_url_func(audio_file_name)
+    document_name = f"automatic_whisper_transcript_of__{sanitized_file_name}"
+    download_url = f"download/{quote(document_name)}.zip"
+    return f"{req.base_url}{download_url}"
+
 async def get_transcript_from_db(audio_file_hash: str) -> Optional[AudioTranscript]:
     return await execute_with_retry(_get_transcript_from_db, audio_file_hash)
 
@@ -916,17 +922,21 @@ async def get_or_compute_transcript(file: UploadFile,
         try:
             existing_audio_transcript = await get_transcript_from_db(audio_file_hash)
             if existing_audio_transcript:
+                # Generate the download URL based on the existing audio transcript data
+                download_url = generate_download_url(existing_audio_transcript.audio_file_name, req)
                 existing_audio_transcript_dict = convert_to_pydantic_response(
                     existing_audio_transcript, 
                     compute_embeddings_for_resulting_transcript_document, 
                     llm_model_name, 
-                    embedding_pooling_method
+                    embedding_pooling_method,
+                    download_url
                 )
                 return AudioTranscriptResponse(**existing_audio_transcript_dict)
             current_position = file.file.tell()
             file.file.seek(0, os.SEEK_END)
             audio_file_size_mb = file.file.tell() / (1024 * 1024)
             file.file.seek(current_position)
+            
             with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
                 shutil.copyfileobj(file.file, tmp_file)
                 audio_file_name = tmp_file.name
