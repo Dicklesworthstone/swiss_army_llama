@@ -744,9 +744,26 @@ async def download_file(url: str, expected_size: int, expected_hash: str) -> str
 
 # Audio Transcript functions start here:
 
+
 def object_as_dict(obj):
     return {c.key: getattr(obj, c.key) for c in inspect(obj).mapper.column_attrs}
 
+def convert_to_pydantic_response(audio_transcript, compute_embeddings_for_resulting_transcript_document, llm_model_name, embedding_pooling_method):
+    audio_transcript_dict = object_as_dict(audio_transcript)
+    # Convert JSON fields from strings to proper lists/dictionaries
+    audio_transcript_dict['segments_json'] = eval(audio_transcript_dict['segments_json'])
+    audio_transcript_dict['combined_transcript_text_list_of_metadata_dicts'] = eval(audio_transcript_dict['combined_transcript_text_list_of_metadata_dicts'])
+    audio_transcript_dict['info_json'] = eval(audio_transcript_dict['info_json'])
+    # Update fields based on the request
+    audio_transcript_dict['url_to_download_zip_file_of_embeddings'] = ""  # Set this based on actual logic
+    if compute_embeddings_for_resulting_transcript_document:
+        audio_transcript_dict['llm_model_name'] = llm_model_name
+        audio_transcript_dict['embedding_pooling_method'] = embedding_pooling_method
+    else:
+        audio_transcript_dict['llm_model_name'] = ""
+        audio_transcript_dict['embedding_pooling_method'] = ""
+    return audio_transcript_dict
+    
 async def get_transcript_from_db(audio_file_hash: str) -> Optional[AudioTranscript]:
     return await execute_with_retry(_get_transcript_from_db, audio_file_hash)
 
@@ -900,8 +917,12 @@ async def get_or_compute_transcript(file: UploadFile,
         try:
             existing_audio_transcript = await get_transcript_from_db(audio_file_hash)
             if existing_audio_transcript:
-                # Convert the existing_audio_transcript SQLAlchemy object to a dictionary
-                existing_audio_transcript_dict = object_as_dict(existing_audio_transcript)
+                existing_audio_transcript_dict = convert_to_pydantic_response(
+                    existing_audio_transcript, 
+                    compute_embeddings_for_resulting_transcript_document, 
+                    llm_model_name, 
+                    embedding_pooling_method
+                )
                 return AudioTranscriptResponse(**existing_audio_transcript_dict)
             current_position = file.file.tell()
             file.file.seek(0, os.SEEK_END)
@@ -959,7 +980,7 @@ async def get_or_compute_transcript(file: UploadFile,
             await shared_resources.lock_manager.unlock(lock)
     else:
         return {"status": "already processing"}
-
+    
 def get_audio_duration_seconds(audio_input) -> float:
     if isinstance(audio_input, bytes):
         audio_file = io.BytesIO(audio_input)
