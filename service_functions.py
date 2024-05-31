@@ -896,7 +896,8 @@ async def get_or_compute_transcript(file: UploadFile,
         try:
             existing_audio_transcript = await get_transcript_from_db(audio_file_hash)
             if existing_audio_transcript:
-                return AudioTranscriptResponse(**existing_audio_transcript)
+                existing_audio_transcript_dict = existing_audio_transcript.dict()
+                return AudioTranscriptResponse(**existing_audio_transcript_dict)                
             current_position = file.file.tell()
             file.file.seek(0, os.SEEK_END)
             audio_file_size_mb = file.file.tell() / (1024 * 1024)
