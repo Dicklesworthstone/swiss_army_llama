@@ -27,6 +27,7 @@ import textract
 import zstandard as zstd
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
+from sqlalchemy.inspection import inspect
 from fastapi import HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from typing import List, Optional, Dict, Any
@@ -743,6 +744,9 @@ async def download_file(url: str, expected_size: int, expected_hash: str) -> str
 
 # Audio Transcript functions start here:
 
+def object_as_dict(obj):
+    return {c.key: getattr(obj, c.key) for c in inspect(obj).mapper.column_attrs}
+
 async def get_transcript_from_db(audio_file_hash: str) -> Optional[AudioTranscript]:
     return await execute_with_retry(_get_transcript_from_db, audio_file_hash)
 
@@ -896,8 +900,9 @@ async def get_or_compute_transcript(file: UploadFile,
         try:
             existing_audio_transcript = await get_transcript_from_db(audio_file_hash)
             if existing_audio_transcript:
-                existing_audio_transcript_dict = existing_audio_transcript.dict()
-                return AudioTranscriptResponse(**existing_audio_transcript_dict)                
+                # Convert the existing_audio_transcript SQLAlchemy object to a dictionary
+                existing_audio_transcript_dict = object_as_dict(existing_audio_transcript)
+                return AudioTranscriptResponse(**existing_audio_transcript_dict)
             current_position = file.file.tell()
             file.file.seek(0, os.SEEK_END)
             audio_file_size_mb = file.file.tell() / (1024 * 1024)
