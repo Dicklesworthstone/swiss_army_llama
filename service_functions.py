@@ -744,18 +744,17 @@ async def download_file(url: str, expected_size: int, expected_hash: str) -> str
 
 # Audio Transcript functions start here:
 
-
 def object_as_dict(obj):
     return {c.key: getattr(obj, c.key) for c in inspect(obj).mapper.column_attrs}
 
-def convert_to_pydantic_response(audio_transcript, compute_embeddings_for_resulting_transcript_document, llm_model_name, embedding_pooling_method):
+def convert_to_pydantic_response(audio_transcript, compute_embeddings_for_resulting_transcript_document, llm_model_name, embedding_pooling_method, download_url):
     audio_transcript_dict = object_as_dict(audio_transcript)
-    # Convert JSON fields from strings to proper lists/dictionaries
-    audio_transcript_dict['segments_json'] = eval(audio_transcript_dict['segments_json'])
-    audio_transcript_dict['combined_transcript_text_list_of_metadata_dicts'] = eval(audio_transcript_dict['combined_transcript_text_list_of_metadata_dicts'])
-    audio_transcript_dict['info_json'] = eval(audio_transcript_dict['info_json'])
+    # Convert JSON fields from strings to proper lists/dictionaries using json.loads
+    audio_transcript_dict['segments_json'] = json.loads(audio_transcript_dict['segments_json'])
+    audio_transcript_dict['combined_transcript_text_list_of_metadata_dicts'] = json.loads(audio_transcript_dict['combined_transcript_text_list_of_metadata_dicts'])
+    audio_transcript_dict['info_json'] = json.loads(audio_transcript_dict['info_json'])
     # Update fields based on the request
-    audio_transcript_dict['url_to_download_zip_file_of_embeddings'] = ""  # Set this based on actual logic
+    audio_transcript_dict['url_to_download_zip_file_of_embeddings'] = download_url
     if compute_embeddings_for_resulting_transcript_document:
         audio_transcript_dict['llm_model_name'] = llm_model_name
         audio_transcript_dict['embedding_pooling_method'] = embedding_pooling_method
@@ -763,7 +762,7 @@ def convert_to_pydantic_response(audio_transcript, compute_embeddings_for_result
         audio_transcript_dict['llm_model_name'] = ""
         audio_transcript_dict['embedding_pooling_method'] = ""
     return audio_transcript_dict
-    
+
 async def get_transcript_from_db(audio_file_hash: str) -> Optional[AudioTranscript]:
     return await execute_with_retry(_get_transcript_from_db, audio_file_hash)
 
