@@ -752,7 +752,12 @@ def convert_to_pydantic_response(audio_transcript, compute_embeddings_for_result
     # Convert JSON fields from strings to proper lists/dictionaries using json.loads
     audio_transcript_dict['segments_json'] = json.loads(audio_transcript_dict['segments_json'])
     audio_transcript_dict['combined_transcript_text_list_of_metadata_dicts'] = json.loads(audio_transcript_dict['combined_transcript_text_list_of_metadata_dicts'])
-    audio_transcript_dict['info_json'] = json.loads(audio_transcript_dict['info_json'])
+    # Ensure info_json is a dictionary
+    info_json = json.loads(audio_transcript_dict['info_json'])
+    if isinstance(info_json, list):
+        # Convert list to dictionary if necessary
+        info_json = {str(i): info_json[i] for i in range(len(info_json))}
+    audio_transcript_dict['info_json'] = info_json
     # Update fields based on the request
     audio_transcript_dict['url_to_download_zip_file_of_embeddings'] = download_url
     if compute_embeddings_for_resulting_transcript_document:
