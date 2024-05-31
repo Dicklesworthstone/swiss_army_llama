@@ -884,19 +884,19 @@ async def get_or_compute_transcript(file: UploadFile,
                                     embedding_pooling_method: str,
                                     corpus_identifier_string: str,
                                     req: Request = None
-                                    ) -> dict:
+                                    ) -> AudioTranscriptResponse:
     request_time = datetime.utcnow()
     ip_address = req.client.host if req else "127.0.0.1"
     file_contents = await file.read()
     audio_file_hash = sha3_256(file_contents).hexdigest()
     file.file.seek(0)  # Reset file pointer after read
     unique_id = f"transcript_{audio_file_hash}_{llm_model_name}_{embedding_pooling_method}"
-    lock = await shared_resources.lock_manager.lock(unique_id)    
+    lock = await shared_resources.lock_manager.lock(unique_id)
     if lock.valid:
-        try:            
+        try:
             existing_audio_transcript = await get_transcript_from_db(audio_file_hash)
             if existing_audio_transcript:
-                return existing_audio_transcript
+                return AudioTranscriptResponse(**existing_audio_transcript)
             current_position = file.file.tell()
             file.file.seek(0, os.SEEK_END)
             audio_file_size_mb = file.file.tell() / (1024 * 1024)
@@ -929,7 +929,7 @@ async def get_or_compute_transcript(file: UploadFile,
             )
             audio_transcript_response = {
                 "audio_file_hash": audio_file_hash,
-                "audio_file_name": audio_file_name,
+                "audio_file_name": file.filename,
                 "audio_file_size_mb": audio_file_size_mb,
                 "segments_json": segment_details,
                 "combined_transcript_text": combined_transcript_text,
@@ -950,9 +950,9 @@ async def get_or_compute_transcript(file: UploadFile,
                 pass
             return AudioTranscriptResponse(**audio_transcript_response)
         finally:
-            await shared_resources.lock_manager.unlock(lock)    
+            await shared_resources.lock_manager.unlock(lock)
     else:
-        return {"status": "already processing"}               
+        return {"status": "already processing"}
 
 def get_audio_duration_seconds(audio_input) -> float:
     if isinstance(audio_input, bytes):
