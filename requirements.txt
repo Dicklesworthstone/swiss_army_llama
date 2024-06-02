@@ -13,7 +13,6 @@ magika
 mutagen
 nvgpu
 pandas
-pdftotext
 pillow
 psutil
 pydantic
