@@ -790,7 +790,7 @@ async def get_all_embedding_vectors_for_document(
                     document_embedding_request['llm_model_name'] = llm_model_name
                     document_embedding_request['document_file_hash'] = document_file_hash
                     if thousands_of_input_words > MAX_THOUSANDS_OF_WORDs_FOR_DOCUMENT_EMBEDDING:
-                        raise HTTPException(status_code=400, detail=f"Document contains ~{int(thousands_of_input_words*1000):,}, more than the maximum of {MAX_THOUSANDS_OF_WORDs_FOR_DOCUMENT_EMBEDDING*1000:,} words, which would take too long to compute embeddings for. Please submit a smaller document.") 
+                        raise HTTPException(status_code=400, detail=f"Document contains ~{int(thousands_of_input_words*1000):,} words, more than the maximum of {MAX_THOUSANDS_OF_WORDs_FOR_DOCUMENT_EMBEDDING*1000:,} words, which would take too long to compute embeddings for. Please submit a smaller document.") 
                     first_10_words_of_input_text = ' '.join(' '.join(sentences).split()[:10])
                     logger.info(f"Received request to extract embeddings for document with MIME type: {mime_type} and size: {os.path.getsize(temp_file_path):,} bytes from IP address: {client_ip}; First 10 words of the document: '{first_10_words_of_input_text}...'")
                     logger.info(f"Document contains ~{int(thousands_of_input_words*1000):,} words, which is within the maximum of {MAX_THOUSANDS_OF_WORDs_FOR_DOCUMENT_EMBEDDING*1000:,} words. Proceeding with embedding computation using {llm_model_name} and pooling method {embedding_pooling_method}.") 
