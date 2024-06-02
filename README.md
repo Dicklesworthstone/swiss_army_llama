@@ -11,6 +11,8 @@ The Swiss Army Llama is designed to facilitate and optimize the process of worki
 Some additional useful endpoints are provided, such as computing semantic similarity between submitted text strings. The service leverages a high-performance Rust-based library, `fast_vector_similarity`, to offer a range of similarity measures including `spearman_rho`, `kendall_tau`, `approximate_distance_correlation`, `jensen_shannon_similarity`, and [`hoeffding_d`](https://blogs.sas.com/content/iml/2021/05/03/examples-hoeffding-d.html). Additionally, semantic search across all your cached embeddings is supported using FAISS vector searching. You can either use the built in cosine similarity from FAISS, or supplement this with a second pass that computes the more sophisticated similarity measures for the most relevant subset of the stored vectors found using cosine similarity (see the advanced semantic search endpoint for this functionality).
 
 Also, we now support multiple embedding pooling methods for combining token-level embedding vectors into a single fixed-length embedding vector for any length of input text, including the following:
+   - `mean`: Mean pooling of token embeddings.
+   - `mins_maxes`: Concatenation of the minimum and maximum values of each dimension of the token embeddings.
    - `svd`: Concatenation of the first two singular vectors obtained from the Singular Value Decomposition (SVD) of the token embeddings matrix.
    - `svd_first_four`: Concatenation of the first four singular vectors obtained from the Singular Value Decomposition (SVD) of the token embeddings matrix.
    - `ica`: Flattened independent components obtained from Independent Component Analysis (ICA) of the token embeddings.

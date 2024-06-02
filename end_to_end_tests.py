@@ -30,7 +30,7 @@ async def get_model_names() -> List[str]:
         return [name for name in model_names if "llava" not in name]
 
 async def get_embedding_pooling_methods() -> List[str]:
-    pooling_methods = ['svd', 'svd_first_four', 'ica', 'factor_analysis', 'gaussian_random_projection']
+    pooling_methods = ['meam', 'mins_maxes', 'svd', 'svd_first_four', 'ica', 'factor_analysis', 'gaussian_random_projection']
     print(f"Using embedding pooling methods: {pooling_methods}")
     return pooling_methods
 

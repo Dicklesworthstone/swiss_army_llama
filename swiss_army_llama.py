@@ -86,7 +86,7 @@ MAX_THOUSANDS_OF_WORDs_FOR_DOCUMENT_EMBEDDING = config("MAX_THOUSANDS_OF_WORDs_F
 DEFAULT_COMPLETION_TEMPERATURE = config("DEFAULT_COMPLETION_TEMPERATURE", default=0.7, cast=float)
 DEFAULT_MAX_COMPLETION_TOKENS = config("DEFAULT_MAX_COMPLETION_TOKENS", default=1000, cast=int)
 DEFAULT_NUMBER_OF_COMPLETIONS_TO_GENERATE = config("DEFAULT_NUMBER_OF_COMPLETIONS_TO_GENERATE", default=1, cast=int)
-DEFAULT_EMBEDDING_POOLING_METHOD = config("DEFAULT_EMBEDDING_POOLING_METHOD", default="svd", cast=str)
+DEFAULT_EMBEDDING_POOLING_METHOD = config("DEFAULT_EMBEDDING_POOLING_METHOD", default="mean", cast=str)
 
 logger.info(f"USE_RAMDISK is set to: {USE_RAMDISK}")
 
@@ -296,7 +296,7 @@ async def add_new_model(model_url: str, token: str = None) -> Dict[str, Any]:
 The request must contain the following attributes:
 - `text`: The input text for which the embedding vector is to be retrieved.
 - `llm_model_name`: The model used to calculate the embedding (optional, will use the default model if not provided).
-- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'svd', 'svd_first_four', 'ica', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
+- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'mean', 'mins_maxes', 'svd', 'svd_first_four', 'ica', 'factor_analysis', 'gaussian_random_projection'; default is 'mean').
 
 ### Example (note that `llm_model_name` is optional):
 ```json
@@ -436,7 +436,7 @@ async def compute_similarity_between_strings(request: SimilarityRequest, req: Re
 The request must contain the following attributes:
 - `query_text`: The input text for which to find the most similar string.
 - `llm_model_name`: The model used to calculate embeddings.
-- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'svd', 'svd_first_four', 'ica', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
+- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'mean', 'mins_maxes', 'svd', 'svd_first_four', 'ica', 'factor_analysis', 'gaussian_random_projection'; default is 'mean').
 - `corpus_identifier_string`: An optional string identifier to restrict the search to a specific corpus.
 - `number_of_most_similar_strings_to_return`: (Optional) The number of most similar strings to return, defaults to 10.
 
@@ -446,7 +446,7 @@ The request must contain the following attributes:
     "query_text": "Find me the most similar string!",
     "llm_model_name": "nomic-embed-text-v1.5.Q6_K",
     "corpus_identifier_string": "pastel_related_documentation_corpus",
-    "embedding_pooling_method": "svd",
+    "embedding_pooling_method": "mean",
     "number_of_most_similar_strings_to_return": 5
 }
 ```
@@ -548,7 +548,7 @@ async def search_stored_embeddings_with_query_string_for_semantic_similarity(req
 The request must contain the following attributes:
 - `query_text`: The input text for which to find the most similar string.
 - `llm_model_name`: The model used to calculate embeddings.
-- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'svd', 'svd_first_four', 'ica', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
+- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'mean', 'mins_maxes', 'svd', 'svd_first_four', 'ica', 'factor_analysis', 'gaussian_random_projection'; default is 'mean').
 - `corpus_identifier_string`: An optional string identifier to restrict the search to a specific corpus.
 - `similarity_filter_percentage`: (Optional) The percentage of embeddings to filter based on cosine similarity, defaults to 0.02 (i.e., top 2%).
 - `number_of_most_similar_strings_to_return`: (Optional) The number of most similar strings to return after applying the second similarity measure, defaults to 10.
@@ -559,7 +559,7 @@ The request must contain the following attributes:
 {
     "query_text": "Find me the most similar string!",
     "llm_model_name": "nomic-embed-text-v1.5.Q6_K",
-    "embedding_pooling_method": "svd",
+    "embedding_pooling_method": "mean",
     "corpus_identifier_string": "specific_corpus"
     "similarity_filter_percentage": 0.02,
     "number_of_most_similar_strings_to_return": 5,
@@ -672,7 +672,7 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
 - `hash`: SHA3-256 hash of the document file to verify integrity (optional; in lieu of `file`).
 - `size`: Size of the document file in bytes to verify completeness (optional; in lieu of `file`).
 - `llm_model_name`: The model used to calculate embeddings (optional).
-- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'means', 'means_mins_maxes', 'means_mins_maxes_stds_kurtoses', 'svd', 'svd_first_four', 'ica', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
+- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'mean', 'mins_maxes', 'svd', 'svd_first_four', 'ica', 'factor_analysis', 'gaussian_random_projection'; default is 'mean').
 - `corpus_identifier_string`: An optional string identifier for grouping documents into a specific corpus.
 - `json_format`: The format of the JSON response (optional, see details below).
 - `send_back_json_or_zip_file`: Whether to return a JSON file or a ZIP file containing the embeddings file (optional, defaults to `zip`).
@@ -1156,7 +1156,7 @@ async def turn_pydantic_model_description_into_bnf_grammar_for_llm(
 - `size`: Size of the audio file in bytes to verify completeness.
 - `compute_embeddings_for_resulting_transcript_document`: Boolean to indicate if document embeddings should be computed (optional, defaults to True).
 - `llm_model_name`: The language model used for computing embeddings (optional, defaults to the default model name).
-- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'svd', 'svd_first_four', 'ica', 'factor_analysis', 'gaussian_random_projection'; default is 'svd').
+- `embedding_pooling_method`: The method used to pool the embeddings (Choices: 'mean', 'mins_maxes', 'svd', 'svd_first_four', 'ica', 'factor_analysis', 'gaussian_random_projection'; default is 'mean').
 - `req`: HTTP Request object for additional request metadata (optional).
 - `token`: Security token for API access (optional).
 - `client_ip`: Client IP for logging and security (optional).
@@ -1180,7 +1180,7 @@ async def compute_transcript_with_whisper_from_audio(
     size: int = Form(None),
     compute_embeddings_for_resulting_transcript_document: Optional[bool] = True,
     llm_model_name: str = DEFAULT_EMBEDDING_MODEL_NAME, 
-    embedding_pooling_method: str = "svd",
+    embedding_pooling_method: str = "mean",
     corpus_identifier_string: str = "",
     req: Request = None,
     token: str = None,
