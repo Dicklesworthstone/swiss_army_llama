@@ -76,6 +76,7 @@ if use_hardcoded_security_token:
 else:
     USE_SECURITY_TOKEN = False
 DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="Meta-Llama-3-8B-Instruct.Q3_K_S", cast=str) 
+DEFAULT_EMBEDDING_MODEL_NAME = config("DEFAULT_EMBEDDING_MODEL_NAME", default="nomic-embed-text-v1.5.Q6_K", cast=str)
 DEFAULT_MULTI_MODAL_MODEL_NAME = config("DEFAULT_MULTI_MODAL_MODEL_NAME", default="llava-llama-3-8b-v1_1-int4", cast=str)
 USE_RAMDISK = config("USE_RAMDISK", default=False, cast=bool)
 USE_RESOURCE_MONITORING = config("USE_RESOURCE_MONITORING", default=1, cast=bool)
@@ -301,7 +302,7 @@ The request must contain the following attributes:
 ```json
 {
     "text": "This is a sample text.",
-    "llm_model_name": "bge-m3-q8_0",
+    "llm_model_name": "nomic-embed-text-v1.5.Q6_K",
     "embedding_pooling_method": "svd",
     "corpus_identifier_string": "pastel_related_documentation_corpus"
 }
@@ -362,7 +363,7 @@ The request must contain the following attributes:
 {
     "text1": "This is a sample text.",
     "text2": "This is another sample text.",
-    "llm_model_name": "bge-m3-q8_0",
+    "llm_model_name": "nomic-embed-text-v1.5.Q6_K",
     "similarity_measure": "all"
 }
 ```""")
@@ -443,7 +444,7 @@ The request must contain the following attributes:
 ```json
 {
     "query_text": "Find me the most similar string!",
-    "llm_model_name": "bge-m3-q8_0",
+    "llm_model_name": "nomic-embed-text-v1.5.Q6_K",
     "corpus_identifier_string": "pastel_related_documentation_corpus",
     "embedding_pooling_method": "svd",
     "number_of_most_similar_strings_to_return": 5
@@ -557,7 +558,7 @@ The request must contain the following attributes:
 ```json
 {
     "query_text": "Find me the most similar string!",
-    "llm_model_name": "bge-m3-q8_0",
+    "llm_model_name": "nomic-embed-text-v1.5.Q6_K",
     "embedding_pooling_method": "svd",
     "corpus_identifier_string": "specific_corpus"
     "similarity_filter_percentage": 0.02,
@@ -648,7 +649,7 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
                 response_time = datetime.utcnow()
                 total_time = (response_time - request_time).total_seconds()
                 logger.info(f"Finished advanced search in {total_time} seconds. Found {len(results)} results.")
-                return {"query_text": request.query_text, "corpus_identifier_string": request.corpus_identifier_string, "results": results}
+                return {"query_text": request.query_text, "corpus_identifier_string": request.corpus_identifier_string, "embedding_pooling_method": request.embedding_pooling_method, "results": results}
             except Exception as e:
                 logger.error(f"An error occurred while processing the request: {e}")
                 traceback.print_exc()
@@ -698,7 +699,7 @@ async def get_all_embedding_vectors_for_document(
     url: str = Form(None),
     hash: str = Form(None),
     size: int = Form(None),
-    llm_model_name: str = DEFAULT_MODEL_NAME,
+    llm_model_name: str = DEFAULT_EMBEDDING_MODEL_NAME,
     embedding_pooling_method: str = DEFAULT_EMBEDDING_POOLING_METHOD,
     corpus_identifier_string: str = "", 
     json_format: str = 'records',
@@ -1178,7 +1179,7 @@ async def compute_transcript_with_whisper_from_audio(
     hash: str = Form(None),
     size: int = Form(None),
     compute_embeddings_for_resulting_transcript_document: Optional[bool] = True,
-    llm_model_name: str = DEFAULT_MODEL_NAME, 
+    llm_model_name: str = DEFAULT_EMBEDDING_MODEL_NAME, 
     embedding_pooling_method: str = "svd",
     corpus_identifier_string: str = "",
     req: Request = None,

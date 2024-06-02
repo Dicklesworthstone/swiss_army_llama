@@ -11,6 +11,7 @@ from datetime import datetime
 
 Base = declarative_base()
 DEFAULT_MODEL_NAME = config("DEFAULT_MODEL_NAME", default="Meta-Llama-3-8B-Instruct.Q3_K_S", cast=str) 
+DEFAULT_EMBEDDING_MODEL_NAME = config("DEFAULT_EMBEDDING_MODEL_NAME", default="nomic-embed-text-v1.5.Q6_K", cast=str)
 DEFAULT_MULTI_MODAL_MODEL_NAME = config("DEFAULT_MULTI_MODAL_MODEL_NAME", default="llava-llama-3-8b-v1_1-int4", cast=str)
 DEFAULT_MAX_COMPLETION_TOKENS = config("DEFAULT_MAX_COMPLETION_TOKENS", default=100, cast=int)
 DEFAULT_NUMBER_OF_COMPLETIONS_TO_GENERATE = config("DEFAULT_NUMBER_OF_COMPLETIONS_TO_GENERATE", default=4, cast=int)
@@ -85,14 +86,14 @@ def update_document_hash_on_remove(target, value, initiator):
 
 class EmbeddingRequest(BaseModel):
     text: str = ""
-    llm_model_name: str = DEFAULT_MODEL_NAME
+    llm_model_name: str = DEFAULT_EMBEDDING_MODEL_NAME
     embedding_pooling_method: str = DEFAULT_EMBEDDING_POOLING_METHOD
     corpus_identifier_string: str = ""
 
 class SimilarityRequest(BaseModel):
     text1: str = ""
     text2: str = ""
-    llm_model_name: str = DEFAULT_MODEL_NAME
+    llm_model_name: str = DEFAULT_EMBEDDING_MODEL_NAME
     embedding_pooling_method: str = DEFAULT_EMBEDDING_POOLING_METHOD
     similarity_measure: str = "all"
     @field_validator('similarity_measure')
@@ -105,7 +106,7 @@ class SimilarityRequest(BaseModel):
 class SemanticSearchRequest(BaseModel):
     query_text: str = ""
     number_of_most_similar_strings_to_return: int = 10
-    llm_model_name: str = DEFAULT_MODEL_NAME
+    llm_model_name: str = DEFAULT_EMBEDDING_MODEL_NAME
     embedding_pooling_method: str = DEFAULT_EMBEDDING_POOLING_METHOD
     corpus_identifier_string: str = ""
         
@@ -117,7 +118,7 @@ class SemanticSearchResponse(BaseModel):
 
 class AdvancedSemanticSearchRequest(BaseModel):
     query_text: str = ""
-    llm_model_name: str = DEFAULT_MODEL_NAME
+    llm_model_name: str = DEFAULT_EMBEDDING_MODEL_NAME
     embedding_pooling_method: str = DEFAULT_EMBEDDING_POOLING_METHOD
     corpus_identifier_string: str = ""
     similarity_filter_percentage: float = 0.01

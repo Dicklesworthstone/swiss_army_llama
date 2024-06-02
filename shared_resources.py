@@ -1,4 +1,4 @@
-from misc_utility_functions import  is_redis_running, start_redis_server, build_faiss_indexes, suppress_stdout_stderr
+from misc_utility_functions import  is_redis_running, start_redis_server, build_faiss_indexes
 from database_functions import DatabaseWriter, initialize_db, AsyncSessionLocal, delete_expired_rows 
 from ramdisk_functions import setup_ramdisk, copy_models_to_ramdisk, check_that_user_has_required_permissions_to_manage_ramdisks
 from logger_config import setup_logger
