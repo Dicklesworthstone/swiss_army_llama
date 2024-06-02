@@ -580,8 +580,7 @@ The response will include the most similar strings found in the database, along 
         ...
     ]
 }
-```""",
-        response_description="A JSON object containing the query text and the most similar strings, along with their similarity scores for multiple measures.")
+```""", response_description="A JSON object containing the query text and the most similar strings, along with their similarity scores for multiple measures.")
 async def advanced_search_stored_embeddings_with_query_string_for_semantic_similarity(request: AdvancedSemanticSearchRequest, req: Request, token: str = None) -> AdvancedSemanticSearchResponse:
     if USE_SECURITY_TOKEN and use_hardcoded_security_token and (token is None or token != SECURITY_TOKEN):
         raise HTTPException(status_code=403, detail="Unauthorized")
@@ -619,13 +618,14 @@ async def advanced_search_stored_embeddings_with_query_string_for_semantic_simil
                 num_results_before_corpus_filter = min(num_results_before_corpus_filter, len(associated_texts_by_model_and_pooling_method[llm_model_name][embedding_pooling_method]))
                 similarities, indices = faiss_index.search(input_embedding, num_results_before_corpus_filter)
                 filtered_indices = indices[0]
+                filtered_similarities = similarities[0]
                 similarity_results = []
                 associated_texts = associated_texts_by_model_and_pooling_method[llm_model_name][embedding_pooling_method]
                 list_of_corpus_identifier_strings = await get_list_of_corpus_identifiers_from_list_of_embedding_texts(associated_texts, llm_model_name, embedding_pooling_method)
-                for idx in filtered_indices:
-                    if list_of_corpus_identifier_strings[idx] == request.corpus_identifier_string:
+                for idx, similarity in zip(filtered_indices, filtered_similarities):
+                    if idx < len(associated_texts) and list_of_corpus_identifier_strings[idx] == request.corpus_identifier_string:
                         associated_text = associated_texts[idx]
-                        similarity_results.append((similarities[0][idx], associated_text))
+                        similarity_results.append((similarity, associated_text))
                 similarity_results = sorted(similarity_results, key=lambda x: x[0], reverse=True)[:num_results]
                 for _, associated_text in similarity_results:
                     embedding_request = EmbeddingRequest(text=associated_text, llm_model_name=llm_model_name, embedding_pooling_method=embedding_pooling_method)

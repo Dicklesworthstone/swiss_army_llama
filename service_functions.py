@@ -275,7 +275,7 @@ async def calculate_sentence_embeddings_list(llama, texts: list, embedding_pooli
         else:
             number_of_embeddings = 1
             current_set_of_embeddings = [current_set_of_embeddings]
-        logger.info(f"Sentence {i + 1} of {len(texts):,} has {number_of_embeddings:,} embeddings for text '{current_text[:50]}...'")
+        logger.info(f"Sentence {i + 1:,} of {len(texts):,} has {number_of_embeddings:,} embeddings for text '{current_text[:50]}...'")
         embeddings = np.array(current_set_of_embeddings)
         dimension_of_token_embeddings = embeddings.shape[1]
         # Ensure embeddings have enough dimensions for the pooling method
