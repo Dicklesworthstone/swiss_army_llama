@@ -7,7 +7,6 @@ import aioredis
 import asyncio
 import urllib.request
 import os
-import nvgpu
 import glob
 import json
 from filelock import FileLock, Timeout
@@ -17,7 +16,11 @@ from typing import List, Tuple, Dict
 from decouple import config
 from fastapi import HTTPException
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
+try:
+    import nvgpu
+    GPU_AVAILABLE = True
+except ImportError:
+    GPU_AVAILABLE = False
 logger = setup_logger()
 
 embedding_model_cache = {} # Model cache to store loaded models
@@ -45,6 +48,14 @@ if USE_AUTOMATIC_PURGING_OF_EXPIRED_RECORDS:
     scheduler.start()
 
 def is_gpu_available():
+    if not GPU_AVAILABLE:
+        return {
+            "gpu_found": False,
+            "num_gpus": 0,
+            "first_gpu_vram": 0,
+            "total_vram": 0,
+            "error": "nvgpu module not found"
+        }
     try:
         gpu_info = nvgpu.gpu_info()
         num_gpus = len(gpu_info)
