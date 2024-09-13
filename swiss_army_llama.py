@@ -356,7 +356,7 @@ The request must contain the following attributes:
 - `text1`: The first input text.
 - `text2`: The second input text.
 - `llm_model_name`: The model used to calculate embeddings (optional).
-- `similarity_measure`: The similarity measure to be used. Supported measures include `all`, `spearman_rho`, `kendall_tau`, `approximate_distance_correlation`, `jensen_shannon_similarity`, and `hoeffding_d` (optional, default is `all`).
+- `similarity_measure`: The similarity measure to be used. Supported measures include `all`, `spearman_rho`, `kendall_tau`, `approximate_distance_correlation`, `jensen_shannon_dependency_measure`, `normalized_mutual_information`, and `hoeffding_d` (optional, default is `all`).
 
 ### Example Request (note that `llm_model_name` and `similarity_measure` are optional):
 ```json
@@ -552,7 +552,7 @@ The request must contain the following attributes:
 - `corpus_identifier_string`: An optional string identifier to restrict the search to a specific corpus.
 - `similarity_filter_percentage`: (Optional) The percentage of embeddings to filter based on cosine similarity, defaults to 0.02 (i.e., top 2%).
 - `number_of_most_similar_strings_to_return`: (Optional) The number of most similar strings to return after applying the second similarity measure, defaults to 10.
-- `result_sorting_metric`: (Optional) The metric to sort the results by, defaults to 'hoeffding_d'. Choices: 'hoeffding_d', 'cosine_similarity', 'spearman_rho', 'kendall_tau', 'approximate_distance_correlation', 'jensen_shannon_similarity', 'hamming_distance'.
+- `result_sorting_metric`: (Optional) The metric to sort the results by, defaults to 'hoeffding_d'. Choices: 'hoeffding_d', 'cosine_similarity', 'spearman_rho', 'kendall_tau', 'approximate_distance_correlation', 'jensen_shannon_dependency_measure', 'hamming_distance'.
 
 ### Example:
 ```json
